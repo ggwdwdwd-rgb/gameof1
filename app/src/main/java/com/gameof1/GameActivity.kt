@@ -79,10 +79,10 @@ class GameActivity : AppCompatActivity() {
 
         binding.progressInfection.progress = worldPct
         binding.progressCure.progress = curePct
-        binding.tvInfected.text = "$worldPct% (${formatNumber(infected)})"
-        binding.tvCure.text = "$curePct%"
-        binding.tvDNA.text = "${engine.pathogen.dnaPoints} DNA"
-        binding.tvDays.text = "День ${engine.elapsedDays}"
+        binding.tvInfected.text = "🦠 $worldPct% (${formatNumber(infected)})"
+        binding.tvCure.text = "💊 $curePct%"
+        binding.tvDNA.text = "🧬 ${engine.pathogen.dnaPoints} ДНК"
+        binding.tvDays.text = "📅 День ${engine.elapsedDays}"
 
         val hasUpgrades = engine.pathogen.getAvailableUpgrades().isNotEmpty()
         binding.btnUpgrade.alpha = if (hasUpgrades) 1.0f else 0.5f
