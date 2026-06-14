@@ -5,6 +5,11 @@ import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import com.gameof1.databinding.ActivityMenuBinding
 
+/**
+ * Splash / main-menu screen.
+ *
+ * Presents the game title and two buttons: start a new game or exit.
+ */
 class MenuActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMenuBinding
@@ -19,7 +24,7 @@ class MenuActivity : AppCompatActivity() {
         }
 
         binding.btnExit.setOnClickListener {
-            finish()
+            finishAffinity()
         }
     }
 }
