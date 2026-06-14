@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#040D14"
+    android:padding="32dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="☣"
+        android:textSize="80sp"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="PATHOGEN"
+        android:textSize="48sp"
+        android:textStyle="bold"
+        android:textColor="#FF2222"
+        android:letterSpacing="0.15"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="WORLD DOMINATION"
+        android:textSize="16sp"
+        android:textColor="#AA5555"
+        android:letterSpacing="0.3"
+        android:layout_marginBottom="60dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Заразите весь мир до создания лекарства"
+        android:textSize="14sp"
+        android:textColor="#667788"
+        android:gravity="center"
+        android:layout_marginBottom="50dp"/>
+
+    <Button
+        android:id="@+id/btnNewGame"
+        android:layout_width="250dp"
+        android:layout_height="56dp"
+        android:text="🦠  НОВАЯ ИГРА"
+        android:textSize="18sp"
+        android:textColor="#000000"
+        android:backgroundTint="#CC0000"
+        android:layout_marginBottom="16dp"/>
+
+    <Button
+        android:id="@+id/btnExit"
+        android:layout_width="250dp"
+        android:layout_height="48dp"
+        android:text="ВЫХОД"
+        android:textSize="16sp"
+        android:backgroundTint="#1A2A3A"/>
+</LinearLayout>
