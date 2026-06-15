@@ -5,7 +5,7 @@
     android:layout_height="match_parent"
     android:background="#040C18">
 
-    <!-- Верхний контейнер: HUD + уведомления о событиях -->
+    <!-- Верхний HUD + уведомления -->
     <LinearLayout
         android:id="@+id/topContainer"
         android:layout_width="match_parent"
@@ -120,12 +120,12 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Строка события (скрыта по умолчанию) -->
+        <!-- Событие (скрыто по умолчанию) -->
         <TextView
             android:id="@+id/tvEventNotification"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#14090000"
+            android:background="#14060200"
             android:text=""
             android:textColor="#FFAA33"
             android:textSize="12sp"
@@ -134,7 +134,7 @@
             android:visibility="gone"/>
     </LinearLayout>
 
-    <!-- Карта мира -->
+    <!-- Карта мира (с зумом и паном) -->
     <com.gameof1.game.GameView
         android:id="@+id/gameView"
         android:layout_width="match_parent"
@@ -142,148 +142,145 @@
         app:layout_constraintTop_toBottomOf="@id/topContainer"
         app:layout_constraintBottom_toTopOf="@id/bottomBar"/>
 
-    <!-- Нижняя панель -->
+    <!-- Оверлей инфо страны (низ-лево, поверх карты) -->
+    <LinearLayout
+        android:id="@+id/countryInfoPanel"
+        android:layout_width="210dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#D00A1830"
+        android:padding="10dp"
+        android:gravity="center_vertical"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/bottomBar"
+        android:layout_marginBottom="4dp"
+        android:layout_marginStart="4dp">
+
+        <TextView
+            android:id="@+id/tvCountryFlag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🌍"
+            android:textSize="28sp"
+            android:layout_marginEnd="10dp"/>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvCountryName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Страна"
+                android:textColor="#DDDDFF"
+                android:textSize="13sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tvCountryStats"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textColor="#667799"
+                android:textSize="11sp"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center">
+
+            <TextView
+                android:id="@+id/tvCountryInfPct"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0%"
+                android:textColor="#FF5533"
+                android:textSize="19sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="заражено"
+                android:textColor="#445566"
+                android:textSize="9sp"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Нижняя панель управления -->
     <LinearLayout
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
+        android:orientation="horizontal"
         android:background="#0A1628"
+        android:padding="10dp"
+        android:gravity="center_vertical"
         app:layout_constraintBottom_toBottomOf="parent">
 
-        <!-- Инфопанель выбранной страны -->
-        <LinearLayout
-            android:id="@+id/countryInfoPanel"
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/tvDNA"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:background="#0D1F32"
-            android:padding="10dp"
-            android:gravity="center_vertical"
-            android:visibility="gone">
+            android:layout_weight="1"
+            android:text="🧬 0 ДНК"
+            android:textColor="#44AAFF"
+            android:textSize="15sp"
+            android:textStyle="bold"/>
 
-            <TextView
-                android:id="@+id/tvCountryFlag"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🌍"
-                android:textSize="30sp"
-                android:layout_marginEnd="12dp"/>
+        <Button
+            android:id="@+id/btnSpeedPause"
+            android:layout_width="42dp"
+            android:layout_height="34dp"
+            android:text="⏸"
+            android:textSize="13sp"
+            android:backgroundTint="#1A2840"
+            android:paddingHorizontal="0dp"
+            android:layout_marginEnd="3dp"/>
 
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
+        <Button
+            android:id="@+id/btnSpeed1x"
+            android:layout_width="42dp"
+            android:layout_height="34dp"
+            android:text="1×"
+            android:textSize="12sp"
+            android:backgroundTint="#22344E"
+            android:paddingHorizontal="0dp"
+            android:layout_marginEnd="3dp"/>
 
-                <TextView
-                    android:id="@+id/tvCountryName"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Страна"
-                    android:textColor="#DDDDFF"
-                    android:textSize="14sp"
-                    android:textStyle="bold"/>
+        <Button
+            android:id="@+id/btnSpeed2x"
+            android:layout_width="42dp"
+            android:layout_height="34dp"
+            android:text="2×"
+            android:textSize="12sp"
+            android:backgroundTint="#1A2840"
+            android:paddingHorizontal="0dp"
+            android:layout_marginEnd="8dp"/>
 
-                <TextView
-                    android:id="@+id/tvCountryStats"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=""
-                    android:textColor="#667799"
-                    android:textSize="11sp"/>
-            </LinearLayout>
+        <Button
+            android:id="@+id/btnRestart"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:text="↺"
+            android:textSize="16sp"
+            android:backgroundTint="#1A2A3A"
+            android:visibility="gone"
+            android:layout_marginEnd="4dp"/>
 
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:id="@+id/tvCountryInfPct"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="0%"
-                    android:textColor="#FF5533"
-                    android:textSize="21sp"
-                    android:textStyle="bold"/>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="заражено"
-                    android:textColor="#445566"
-                    android:textSize="10sp"/>
-            </LinearLayout>
-        </LinearLayout>
-
-        <!-- Панель управления -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:padding="10dp"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:id="@+id/tvDNA"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="🧬 0 ДНК"
-                android:textColor="#44AAFF"
-                android:textSize="15sp"
-                android:textStyle="bold"/>
-
-            <Button
-                android:id="@+id/btnSpeedPause"
-                android:layout_width="42dp"
-                android:layout_height="34dp"
-                android:text="⏸"
-                android:textSize="13sp"
-                android:backgroundTint="#1A2840"
-                android:paddingHorizontal="0dp"
-                android:layout_marginEnd="3dp"/>
-
-            <Button
-                android:id="@+id/btnSpeed1x"
-                android:layout_width="42dp"
-                android:layout_height="34dp"
-                android:text="1×"
-                android:textSize="12sp"
-                android:backgroundTint="#22344E"
-                android:paddingHorizontal="0dp"
-                android:layout_marginEnd="3dp"/>
-
-            <Button
-                android:id="@+id/btnSpeed2x"
-                android:layout_width="42dp"
-                android:layout_height="34dp"
-                android:text="2×"
-                android:textSize="12sp"
-                android:backgroundTint="#1A2840"
-                android:paddingHorizontal="0dp"
-                android:layout_marginEnd="8dp"/>
-
-            <Button
-                android:id="@+id/btnRestart"
-                android:layout_width="wrap_content"
-                android:layout_height="34dp"
-                android:text="↺"
-                android:textSize="16sp"
-                android:backgroundTint="#1A2A3A"
-                android:visibility="gone"
-                android:layout_marginEnd="4dp"/>
-
-            <Button
-                android:id="@+id/btnUpgrade"
-                android:layout_width="wrap_content"
-                android:layout_height="34dp"
-                android:text="🧬 Мутации"
-                android:textSize="12sp"
-                android:backgroundTint="#550022"/>
-        </LinearLayout>
+        <Button
+            android:id="@+id/btnUpgrade"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:text="🧬 Мутации"
+            android:textSize="12sp"
+            android:backgroundTint="#550022"/>
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
