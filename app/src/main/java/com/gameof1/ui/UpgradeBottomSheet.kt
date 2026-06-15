@@ -18,6 +18,10 @@ class UpgradeBottomSheet(
     private val onPurchased: () -> Unit
 ) : BottomSheetDialogFragment() {
 
+    companion object {
+        const val TAG = "UpgradeBottomSheet"
+    }
+
     private var _binding: BottomSheetUpgradeBinding? = null
     private val binding get() = _binding!!
 
