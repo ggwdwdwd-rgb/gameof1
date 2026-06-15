@@ -63,6 +63,7 @@ class GameActivity : AppCompatActivity() {
         binding.gameView.engine = engine
         binding.gameView.onCountryClicked = { id -> handleCountryClick(id) }
         binding.gameView.onMapReady = { startGameLoop() }
+        binding.tvNews.isSelected = true
 
         binding.btnUpgrade.setOnClickListener {
             if (engine.gameState == GameEngine.GameState.RUNNING ||
@@ -162,6 +163,7 @@ class GameActivity : AppCompatActivity() {
         binding.tvCure.text = "$curePct%"
         binding.tvDNA.text = "🧬 ${engine.pathogen.dnaPoints} ДНК"
         binding.tvDays.text = "День ${engine.elapsedDays}"
+        binding.tvNews.text = "📡 ${engine.currentNews}"
 
         // Опасность: лекарство почти готово
         if (curePct >= 75) {

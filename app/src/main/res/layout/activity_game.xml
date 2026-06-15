@@ -140,6 +140,27 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         app:layout_constraintTop_toBottomOf="@id/topContainer"
+        app:layout_constraintBottom_toTopOf="@id/tvNews"/>
+
+    <!-- Лента новостей -->
+    <TextView
+        android:id="@+id/tvNews"
+        android:layout_width="0dp"
+        android:layout_height="26dp"
+        android:background="#060E1C"
+        android:textColor="#FFAA33"
+        android:textSize="11sp"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:gravity="center_vertical"
+        android:singleLine="true"
+        android:ellipsize="marquee"
+        android:marqueeRepeatLimit="marquee_forever"
+        android:scrollHorizontally="true"
+        android:focusable="true"
+        android:text="📡 Мир в порядке..."
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintBottom_toTopOf="@id/bottomBar"/>
 
     <!-- Оверлей инфо страны (низ-лево, поверх карты) -->
@@ -153,7 +174,7 @@
         android:gravity="center_vertical"
         android:visibility="gone"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintBottom_toTopOf="@id/bottomBar"
+        app:layout_constraintBottom_toTopOf="@id/tvNews"
         android:layout_marginBottom="4dp"
         android:layout_marginStart="4dp">
 

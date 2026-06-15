@@ -15,8 +15,44 @@ class GameEngine {
     // События
     var pendingEventMessage: String? = null
     private var eventCooldown: Int = 0
-    private var whoAlertTicks: Int = 0     // Ускоряет лекарство
-    private var quarantineTicks: Int = 0   // Замедляет границы
+    private var whoAlertTicks: Int = 0
+    private var quarantineTicks: Int = 0
+
+    // Бегущая строка новостей
+    var currentNews: String = "Мир в порядке. Угрозы не выявлено."
+    private var newsIndex: Int = 0
+    private val earlyNews = listOf(
+        "Зафиксированы единичные случаи респираторного заболевания.",
+        "ВОЗ изучает поступающие сообщения о вспышке.",
+        "Врачи не бьют тревогу. Ситуация под контролем.",
+        "Путешественники жалуются на самочувствие после поездок.",
+        "Учёные берут пробы у заболевших для анализа."
+    )
+    private val midNews = listOf(
+        "Число случаев резко возросло. ВОЗ обеспокоена.",
+        "Больницы переполнены в нескольких регионах.",
+        "Правительства вводят ограничения на въезд.",
+        "Фармацевтические компании начали разработку вакцины.",
+        "Паника на рынках: индексы резко падают.",
+        "Аэропорты усилили санитарный контроль.",
+        "Учёные установили геном патогена. Работа над вакциной ускоряется.",
+        "В соцсетях волна дезинформации о происхождении вируса."
+    )
+    private val lateNews = listOf(
+        "Глобальная пандемия! Все страны ввели режим ЧС.",
+        "ООН созвала экстренное заседание по пандемии.",
+        "Армия задействована для поддержания порядка в городах.",
+        "Вакцина на финальной стадии испытаний — осталось немного!",
+        "Международный консорциум учёных объединил усилия.",
+        "Мировые лидеры призывают население к спокойствию.",
+        "Больницы вводят военное положение. Коек катастрофически не хватает."
+    )
+    private val criticalNews = listOf(
+        "🚨 КРИТИЧНО: лекарство в шаге от завершения!",
+        "🚨 Вакцина будет готова в считанные дни. Время на исходе!",
+        "🚨 Прорыв в исследованиях: вакцина проходит последние тесты.",
+        "🚨 Учёные работают круглосуточно. Осталось совсем чуть-чуть!"
+    )
 
     enum class GameState { WAITING, RUNNING, WON, LOST }
 
@@ -48,6 +84,7 @@ class GameEngine {
         earnDNA()
         updatePulse()
         if (eventCooldown > 0) eventCooldown-- else triggerRandomEvent()
+        if (tickCount % 55 == 0L) updateNews()
         checkWinLose()
     }
 
@@ -121,6 +158,17 @@ class GameEngine {
     private fun checkWinLose() {
         if (countries.all { it.isFullyInfected }) gameState = GameState.WON
         if (cureProgress >= 1f) gameState = GameState.LOST
+    }
+
+    private fun updateNews() {
+        val pool = when {
+            cureProgress >= 0.75f -> criticalNews
+            worldInfectionPercent >= 0.35f -> lateNews
+            worldInfectionPercent >= 0.08f -> midNews
+            else -> earlyNews
+        }
+        currentNews = pool[newsIndex % pool.size]
+        newsIndex++
     }
 
     fun triggerMutationBurst() { mutationBurstTicks = 30 }
