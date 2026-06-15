@@ -3,33 +3,53 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="#0A1628"
-    android:padding="16dp">
+    android:background="#0A1628">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="🧬 МУТАЦИИ"
-        android:textSize="22sp"
-        android:textStyle="bold"
-        android:textColor="#FF4444"
-        android:gravity="center"
+    <!-- Ручка -->
+    <View
+        android:layout_width="40dp"
+        android:layout_height="4dp"
+        android:background="#223344"
+        android:layout_gravity="center"
+        android:layout_marginTop="10dp"
         android:layout_marginBottom="4dp"/>
 
-    <TextView
-        android:id="@+id/tvDnaBalance"
+    <!-- Заголовок -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Доступно: 🧬 0 ДНК"
-        android:textSize="14sp"
-        android:textColor="#44AAFF"
-        android:gravity="center"
-        android:layout_marginBottom="12dp"/>
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="12dp"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="🧬 МУТАЦИИ"
+            android:textColor="#FF3333"
+            android:textSize="19sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.08"/>
+
+        <TextView
+            android:id="@+id/tvDnaBalance"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0 ДНК"
+            android:textColor="#44AAFF"
+            android:textSize="16sp"
+            android:textStyle="bold"/>
+    </LinearLayout>
+
+    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#142233"/>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvUpgrades"
         android:layout_width="match_parent"
-        android:layout_height="400dp"
+        android:layout_height="wrap_content"
+        android:padding="8dp"
         android:clipToPadding="false"
-        android:paddingBottom="16dp"/>
+        android:nestedScrollingEnabled="true"/>
 </LinearLayout>
