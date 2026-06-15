@@ -117,5 +117,10 @@ class GameEngine {
         }
     }
 
+    private fun checkWinLose() {
+        if (countries.all { it.isFullyInfected }) gameState = GameState.WON
+        if (cureProgress >= 1f) gameState = GameState.LOST
+    }
+
     fun triggerMutationBurst() { mutationBurstTicks = 30 }
 }
