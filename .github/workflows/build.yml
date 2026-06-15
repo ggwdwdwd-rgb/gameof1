@@ -21,14 +21,24 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.4'
+
+      - name: Download gradle-wrapper.jar
+        run: |
+          mkdir -p gradle/wrapper
+          curl -L -o gradle/wrapper/gradle-wrapper.jar \
+            "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon --project-dir .
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk pathogen-v1.0.apk
@@ -41,9 +51,7 @@ jobs:
           retention-days: 90
 
       - name: Delete old release if exists
-        run: |
-          gh release delete v1.0 --yes 2>/dev/null || true
-          git push origin :refs/tags/v1.0 2>/dev/null || true
+        run: gh release delete v1.0 --yes 2>/dev/null || true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -60,8 +68,8 @@ jobs:
             ---
 
             ### 📲 Установка на телефон
-            1. Скачай файл **`pathogen-v1.0.apk`** ниже
-            2. Открой на телефоне (Android 7.0+)
+            1. Скачай **`pathogen-v1.0.apk`** ниже
+            2. Открой файл на телефоне (Android 7.0+)
             3. Разреши установку: **Настройки → Безопасность → Неизвестные источники**
             4. Установи и играй!
 
@@ -72,17 +80,11 @@ jobs:
             - Наблюдай как вирус распространяется по соседним странам
             - Зарабатывай **🧬 ДНК очки** → трать на **мутации**
             - Успей заразить **100% населения** до создания лекарства
-            - Учёные разрабатывают лекарство всё быстрее — торопись!
 
             ### 🔬 Мутации (16 апгрейдов)
-            | Передача | Тяжесть | Способности |
-            |----------|---------|-------------|
-            | Аэрозоль | Кашель | Вспышка мутаций |
-            | Водный путь | Геморрагия | Латентность |
-            | Холодостойкость | Лекарственная стойкость | Хаос |
-            | Жаростойкость | Генетическое укрепление | Биоплёнка |
-            | Птичий вектор | | |
-            | Морские течения | | |
+            **Передача:** Аэрозоль, Водный путь, Холодостойкость, Жаростойкость, Птичий вектор, Морские течения
+            **Тяжесть:** Кашель, Геморрагия, Лекарственная стойкость, Генетическое укрепление
+            **Способности:** Вспышка мутаций, Латентность, Хаос, Биоплёнка
           files: pathogen-v1.0.apk
           draft: false
           prerelease: false
