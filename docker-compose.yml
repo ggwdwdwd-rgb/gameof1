@@ -1,0 +1,35 @@
+services:
+  server:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      DB_PATH: /app/data/server.db
+      MESSAGE_TTL_DAYS: ${MESSAGE_TTL_DAYS:-14}
+      DEFAULT_INVITE_TTL_HOURS: ${DEFAULT_INVITE_TTL_HOURS:-24}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ENV: production
+    volumes:
+      - ./data:/app/data
+    # Порт наружу не публикуется — снаружи к серверу обращается только Caddy
+    # по внутренней docker-сети (server:8080), сам сервер наружу не торчит.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports:
+      - "80:80" # нужен для HTTP-01 challenge Let's Encrypt
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

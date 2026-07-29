@@ -1,10 +1,24 @@
-*.iml
-.gradle
-/local.properties
-/.idea
 .DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
+*.log
+
+# node
+node_modules/
+dist/
+build/
+.env
+!.env.example
+
+# сервер: локальные данные sqlite и файлы, не должны попадать в git
+/data/
+server/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Expo / React Native (Этап 3+)
+app/.expo/
+app/node_modules/
+app/android/
+app/ios/
+*.jks
+*.keystore
