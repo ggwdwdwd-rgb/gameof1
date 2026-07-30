@@ -12,6 +12,7 @@
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",
     "invite:create": "tsx src/cli/create-invite.ts",
+    "status": "tsx src/cli/status.ts",
     "test:e2e": "tsx test/e2e.mjs"
   },
   "dependencies": {

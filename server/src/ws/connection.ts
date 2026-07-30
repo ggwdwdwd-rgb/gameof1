@@ -67,6 +67,10 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           const payload = parsed.payload as AuthResponsePayload;
           const result = await handleAuthResponse(payload.deviceId, payload.signature, state.nonce);
           if (!result.ok) {
+            // Отказ логируем: раньше он не оставлял в логах никакого следа, и
+            // «устройство не может подключиться» было не отличить от «клиент
+            // вообще не доходит до сервера».
+            log.warn({ deviceId: payload.deviceId, code: result.code }, "отказ в аутентификации устройства");
             send(socket, envelope("auth.error", result));
             return;
           }
@@ -82,6 +86,7 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           const payload = parsed.payload as InviteRedeemPayload;
           const result = handleInviteRedeem(payload);
           if (!result.ok) {
+            log.warn({ code: result.code }, "отказ по коду приглашения");
             send(socket, envelope("invite.redeem.error", result));
             return;
           }

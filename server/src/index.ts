@@ -11,6 +11,10 @@ runMigrations();
 await getSodium(); // прогреваем WASM libsodium один раз до приёма соединений
 
 const app = Fastify({
+  // Снаружи к серверу обращается только Caddy по внутренней docker-сети,
+  // поэтому его X-Forwarded-For можно доверять — иначе в логах вместо адреса
+  // клиента был бы виден внутренний адрес самого Caddy.
+  trustProxy: true,
   logger: {
     level: env.logLevel,
     transport: process.env.NODE_ENV === "production" ? undefined : { target: "pino-pretty" },
@@ -32,7 +36,10 @@ await app.register(fastifyWebsocket, { options: { maxPayload: 64 * 1024 * 1024 }
 app.get("/healthz", async () => ({ status: "ok", connectedDevices: connectedDeviceCount() }));
 
 app.register(async (instance) => {
-  instance.get("/ws", { websocket: true }, (socket) => {
+  instance.get("/ws", { websocket: true }, (socket, req) => {
+    // Открытие WS логируем явно: обычный лог запросов Fastify upgrade-запрос не
+    // показывает, и по логам было не понять, доходит ли клиент до сервера вообще.
+    instance.log.info({ ip: req.ip, ua: req.headers["user-agent"] }, "WS-соединение открыто");
     handleConnection(socket, instance.log);
   });
 });
