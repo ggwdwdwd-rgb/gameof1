@@ -247,7 +247,21 @@ const foreignRejected = await bob.wait(
 );
 check("чужой чат отклонён", Boolean(foreignRejected.payload.code), foreignRejected.payload.code);
 
-// ── 9. Переподключение и история ─────────────────────────────────────────────
+// ── 9. Незнакомое устройство получает внятный отказ ──────────────────────────
+// Это ровно тот случай, который в приложении выглядел как «нет соединения»:
+// сокет открывается, но сервер не признаёт устройство.
+const stranger = new Client("Незнакомец");
+await stranger.open();
+const strangerChallenge = await stranger.wait("auth.challenge");
+stranger.send("auth.response", {
+  deviceId: randomUUID(),
+  signature: crypto.signDetached(strangerChallenge.payload.nonce, stranger.identity.secretKey),
+});
+const authError = await stranger.wait("auth.error");
+check("незнакомое устройство получает auth.error", authError.payload.code === "UNKNOWN_DEVICE", authError.payload.code);
+stranger.ws.close();
+
+// ── 10. Переподключение и история ────────────────────────────────────────────
 bob.ws.close();
 await new Promise((r) => setTimeout(r, 300));
 const bob2 = new Client("Боб");
@@ -269,7 +283,7 @@ check(
     text,
 );
 
-// ── 10. Удаление у всех — только автором ────────────────────────────────────
+// ── 11. Удаление у всех — только автором ────────────────────────────────────
 bob2.send("msg.delete", { msgId: clientMsgId, chatId });
 const notOwner = await bob2.wait("error", (m) => m.payload.code === "NOT_OWNER");
 check("не автор не может удалить сообщение", notOwner.payload.code === "NOT_OWNER");
@@ -278,7 +292,7 @@ alice.send("msg.delete", { msgId: clientMsgId, chatId });
 const deleted = await bob2.wait("msg.deleted", (m) => m.payload.msgId === clientMsgId);
 check("автор удаляет сообщение у всех", Boolean(deleted));
 
-// ── 11. Неизвестный тип пакета ──────────────────────────────────────────────
+// ── 12. Неизвестный тип пакета ──────────────────────────────────────────────
 alice.send("totally.unknown", {});
 const unknown = await alice.wait("error", (m) => m.payload.code === "UNKNOWN_TYPE");
 check("неизвестный тип пакета не рвёт соединение", unknown.payload.code === "UNKNOWN_TYPE");

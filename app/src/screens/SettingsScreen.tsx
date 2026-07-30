@@ -1,7 +1,7 @@
 import React from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useApp } from "../context/AppContext";
+import { describeFailure, useApp } from "../context/AppContext";
 import { useTheme, useThemePreference } from "../theme/ThemeContext";
 import type { ThemePreference } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
@@ -14,10 +14,11 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
 ];
 
 export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactElement {
-  const { identity, contacts, myFingerprint, connectionState } = useApp();
+  const { identity, contacts, myFingerprint, connectionState, connectionFailure, reconnect } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const { preference, setPreference } = useThemePreference();
+  const failureText = connectionState === "connected" ? "" : describeFailure(connectionFailure);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -63,6 +64,16 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
           <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />
           <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Сервер</Text>
           <Text style={[styles.serverUrl, { color: theme.colors.textPrimary }]}>{identity.serverUrl}</Text>
+          {/* Причина отказа видна здесь, чтобы не гадать, что именно не работает. */}
+          {failureText !== "" && (
+            <>
+              <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Почему нет связи</Text>
+              <Text style={[styles.failure, { color: theme.colors.danger }]}>{failureText}</Text>
+              <Pressable style={styles.reconnectButton} onPress={reconnect}>
+                <Text style={[styles.reconnectText, { color: theme.colors.accent }]}>Подключиться заново</Text>
+              </Pressable>
+            </>
+          )}
         </View>
 
         <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>
@@ -122,6 +133,9 @@ const styles = StyleSheet.create({
   label: { fontSize: 13, marginTop: 12 },
   fingerprint: { fontSize: 15, fontWeight: "600", letterSpacing: 1, marginTop: 6 },
   serverUrl: { fontSize: 15, marginTop: 6, marginBottom: 14 },
+  failure: { fontSize: 13, lineHeight: 19, marginTop: 6 },
+  reconnectButton: { paddingVertical: 12 },
+  reconnectText: { fontSize: 15, fontWeight: "500" },
   hint: { fontSize: 12, lineHeight: 17, marginTop: 8, marginBottom: 4 },
   memberRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12 },
   memberText: { marginLeft: 12, flex: 1 },

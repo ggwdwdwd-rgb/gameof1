@@ -24,6 +24,15 @@ import {
 
 export type ConnectionState = "idle" | "connecting" | "connected" | "reconnecting";
 
+/**
+ * Почему соединение не работает. Раньше любая причина выглядела для
+ * пользователя одинаково («нет соединения»), хотя отказ сервера в
+ * аутентификации и недоступный домен требуют совершенно разных действий.
+ */
+export type ConnectionFailure =
+  | { kind: "auth"; code: string }
+  | { kind: "network"; detail: string };
+
 export type AuthMode =
   | { kind: "device"; deviceId: string; identitySecretKey: string }
   | {
@@ -37,6 +46,7 @@ export type AuthMode =
 
 interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   state: (state: ConnectionState) => void;
+  failure: (failure: ConnectionFailure) => void;
   authOk: (payload: AuthOkPayload) => void;
   authError: (payload: AuthErrorPayload) => void;
   inviteOk: (payload: InviteRedeemOkPayload) => void;
@@ -73,6 +83,9 @@ export class WsClient {
   private closedByUser = false;
   private lastTypingSentAt = 0;
   private lastPongAt = 0;
+  private lastSocketError = "";
+  /** Последняя причина отказа — читается экранами, чтобы объяснить проблему. */
+  failure: ConnectionFailure | null = null;
 
   constructor(
     private readonly serverUrl: string,
@@ -88,9 +101,12 @@ export class WsClient {
     ws.onmessage = (event) => {
       void this.handleMessage(String(event.data));
     };
-    ws.onclose = () => this.handleClose();
-    ws.onerror = () => {
-      // onclose вызовется следом — реконнект планируется там
+    ws.onclose = (event) => this.handleClose(event);
+    ws.onerror = (event) => {
+      // onclose вызовется следом — реконнект и разбор причины там. Здесь только
+      // запоминаем текст ошибки: без него причина отказа была неизвестна.
+      const message = (event as { message?: unknown }).message;
+      this.lastSocketError = typeof message === "string" ? message : "";
     };
   }
 
@@ -165,9 +181,12 @@ export class WsClient {
         this.onAuthenticated();
         this.events.emit("authOk", parsed.payload as AuthOkPayload);
         return;
-      case "auth.error":
-        this.events.emit("authError", parsed.payload as AuthErrorPayload);
+      case "auth.error": {
+        const payload = parsed.payload as AuthErrorPayload;
+        this.setFailure({ kind: "auth", code: payload.code });
+        this.events.emit("authError", payload);
         return;
+      }
       case "invite.redeem.ok":
         this.onAuthenticated();
         this.events.emit("inviteOk", parsed.payload as InviteRedeemOkPayload);
@@ -216,6 +235,8 @@ export class WsClient {
 
   private onAuthenticated(): void {
     this.reconnectAttempt = 0;
+    this.failure = null;
+    this.lastSocketError = "";
     this.setState("connected");
     this.startPing();
     void this.flushOutbox();
@@ -279,19 +300,23 @@ export class WsClient {
   /** Ждём готовности соединения (с попыткой переподключиться), максимум timeoutMs. */
   waitUntilReady(timeoutMs: number): Promise<boolean> {
     if (this.isReady()) return Promise.resolve(true);
+    if (this.failure?.kind === "auth") return Promise.resolve(false);
     if (!this.isOpen()) this.forceReconnect();
 
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        unsubscribe();
-        resolve(false);
-      }, timeoutMs);
-      const unsubscribe = this.events.on("state", (state) => {
-        if (state === "connected") {
-          clearTimeout(timer);
-          unsubscribe();
-          resolve(true);
-        }
+      const finish = (result: boolean): void => {
+        clearTimeout(timer);
+        offState();
+        offFailure();
+        resolve(result);
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      const offState = this.events.on("state", (state) => {
+        if (state === "connected") finish(true);
+      });
+      // Ждать таймаут бессмысленно, если сервер прямо отказал в аутентификации.
+      const offFailure = this.events.on("failure", (failure) => {
+        if (failure.kind === "auth") finish(false);
       });
     });
   }
@@ -325,14 +350,28 @@ export class WsClient {
     for (const item of items) this.trySendRaw(item.payload);
   }
 
-  private handleClose(): void {
+  private handleClose(event?: { code?: number; reason?: string }): void {
     this.ws = null;
     this.stopPing();
     if (this.closedByUser) {
       this.setState("idle");
       return;
     }
+
+    // Отказ аутентификации важнее сетевого: сервер ответил, значит домен и TLS
+    // в порядке, и перезапуск ничего не изменит — нужны другие действия.
+    if (this.failure?.kind !== "auth") {
+      const parts = [this.lastSocketError, event?.reason, event?.code ? `код ${event.code}` : ""].filter(
+        (part): part is string => typeof part === "string" && part.length > 0,
+      );
+      this.setFailure({ kind: "network", detail: parts.join(", ") || "соединение закрыто" });
+    }
     this.scheduleReconnect();
+  }
+
+  private setFailure(failure: ConnectionFailure): void {
+    this.failure = failure;
+    this.events.emit("failure", failure);
   }
 
   private scheduleReconnect(): void {

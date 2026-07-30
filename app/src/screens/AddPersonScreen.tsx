@@ -33,7 +33,9 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
       if (result.ok) {
         setInvite(result.invite);
       } else {
-        setError(INVITE_ERRORS[result.reason]);
+        // Конкретная причина (отказ сервера, недоступный домен) полезнее общей
+        // фразы «нет соединения» — по ней сразу понятно, что делать.
+        setError([INVITE_ERRORS[result.reason], result.detail].filter(Boolean).join("\n\n"));
       }
     } catch {
       setError("Не удалось создать код — попробуйте ещё раз.");
@@ -76,6 +78,8 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
         {error && (
           <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
             <Text style={[styles.errorText, { color: theme.colors.danger }]}>{error}</Text>
+            {/* Адрес видно и при ошибке: опечатка в нём — частая причина отказа. */}
+            <Text style={[styles.hint, { color: theme.colors.textMuted }]}>Адрес сервера: {identity.serverUrl}</Text>
           </View>
         )}
 

@@ -15,7 +15,7 @@ import { getLastSyncedTs, setLastSyncedTs } from "../db/syncState";
 import { decryptDeliveredMessage, encryptForChat } from "../chat/encryption";
 import { dmChatId } from "../chat/chatId";
 import { saveIncomingEnvelope, type LocalMediaMeta } from "../chat/media";
-import { WsClient, type ConnectionState } from "../net/wsClient";
+import { WsClient, type ConnectionFailure, type ConnectionState } from "../net/wsClient";
 import type { InviteCreatedPayload, MsgDeliverPayload, RosterMemberPayload } from "../net/protocol";
 import type { DeviceIdentity } from "../storage/identity";
 import { Emitter } from "../util/emitter";
@@ -41,11 +41,29 @@ export type SendResult = { ok: true } | { ok: false; reason: "NO_CONTACT" | "NOT
 
 export type CreateInviteResult =
   | { ok: true; invite: InviteCreatedPayload }
-  | { ok: false; reason: "OFFLINE" | "TIMEOUT" | "SERVER_OUTDATED" };
+  /** detail — конкретная причина отказа соединения, если она известна. */
+  | { ok: false; reason: "OFFLINE" | "TIMEOUT" | "SERVER_OUTDATED"; detail?: string };
+
+/** Человекочитаемая причина отказа + что делать. Пустая строка = проблема не в аутентификации. */
+export function describeFailure(failure: ConnectionFailure | null): string {
+  if (!failure) return "";
+  if (failure.kind === "network") return `Сервер недоступен (${failure.detail}).`;
+  switch (failure.code) {
+    case "UNKNOWN_DEVICE":
+      return "Сервер не знает это устройство. Обычно это значит, что база сервера была пересоздана — нужен новый код приглашения и повторная регистрация в приложении.";
+    case "REVOKED":
+      return "Доступ этого устройства отозван на сервере.";
+    case "BAD_SIGNATURE":
+      return "Сервер не принял подпись устройства — ключи повреждены, нужна повторная регистрация по новому коду.";
+    default:
+      return `Сервер отказал в аутентификации (${failure.code}).`;
+  }
+}
 
 interface AppContextValue {
   identity: DeviceIdentity;
   connectionState: ConnectionState;
+  connectionFailure: ConnectionFailure | null;
   contacts: Contact[];
   chatEvents: Emitter<ChatEvents>;
   myFingerprint: string;
@@ -94,6 +112,7 @@ export function AppProvider({
   children: React.ReactNode;
 }): React.ReactElement {
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
+  const [connectionFailure, setConnectionFailure] = useState<ConnectionFailure | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [myFingerprint, setMyFingerprint] = useState("");
   const cryptoRef = useRef<Crypto | null>(null);
@@ -125,7 +144,11 @@ export function AppProvider({
       });
       wsRef.current = ws;
 
-      ws.events.on("state", setConnectionState);
+      ws.events.on("state", (state) => {
+        setConnectionState(state);
+        if (state === "connected") setConnectionFailure(null);
+      });
+      ws.events.on("failure", setConnectionFailure);
 
       async function upsertAndTrack(member: RosterMemberPayload): Promise<Contact> {
         const contact = contactFromRoster(crypto, member);
@@ -279,6 +302,7 @@ export function AppProvider({
     return {
       identity,
       connectionState,
+      connectionFailure,
       contacts,
       chatEvents,
       myFingerprint,
@@ -311,7 +335,11 @@ export function AppProvider({
         // Раньше здесь была мгновенная проверка isOpen(): если сокет умер в
         // фоне (обычное дело на Android), экран сразу писал «нет соединения».
         // Теперь сначала пробуем переподключиться и подождать авторизацию.
-        if (!(await ws.waitUntilReady(WAIT_READY_MS))) return { ok: false, reason: "OFFLINE" };
+        if (!(await ws.waitUntilReady(WAIT_READY_MS))) {
+          // Причину берём из клиента, а не из состояния React: она появляется
+          // уже во время ожидания, и замыкание экрана её бы не увидело.
+          return { ok: false, reason: "OFFLINE", detail: describeFailure(ws.failure) };
+        }
 
         return new Promise<CreateInviteResult>((resolve) => {
           let settled = false;
@@ -339,7 +367,7 @@ export function AppProvider({
         });
       },
     };
-  }, [identity, connectionState, contacts, chatEvents, myFingerprint]);
+  }, [identity, connectionState, connectionFailure, contacts, chatEvents, myFingerprint]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
