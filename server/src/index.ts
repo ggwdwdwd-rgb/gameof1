@@ -1,5 +1,6 @@
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify from "fastify";
+import { cleanupMessages } from "./db/cleanup.js";
 import { runMigrations } from "./db/migrate.js";
 import { env } from "./env.js";
 import { getSodium } from "./crypto/sodium.js";
@@ -15,6 +16,12 @@ const app = Fastify({
     transport: process.env.NODE_ENV === "production" ? undefined : { target: "pino-pretty" },
   },
 });
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+setInterval(() => {
+  const removed = cleanupMessages();
+  if (removed > 0) app.log.info({ removed }, "очистка доставленных/просроченных сообщений");
+}, ONE_HOUR_MS).unref();
 
 await app.register(fastifyWebsocket);
 

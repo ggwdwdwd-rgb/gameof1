@@ -1,6 +1,4 @@
 // Типы пакетов протокола (см. ARCHITECTURE.md, раздел 4).
-// Этап 1 реализует: auth.challenge/response/ok/error, invite.redeem(.ok/.error),
-// member.joined, ping/pong и generic-эхо остальных типов после аутентификации.
 
 export interface Envelope<T = unknown> {
   v: 1;
@@ -21,6 +19,35 @@ export interface InviteRedeemPayload {
   displayName: string;
   identityPublicKey: string; // base64, Ed25519
   encryptionPublicKey: string; // base64, X25519
+}
+
+export interface MsgSendPayload {
+  clientMsgId: string;
+  chatId: string;
+  contentType: string;
+  ciphertext: string; // base64
+  nonce: string; // base64
+  replyTo: string | null;
+  ttlSec?: number;
+  /** Версия group_keys, которым зашифровано — только для chatId === group:family, см. ARCHITECTURE.md §4.6. */
+  keyVersion?: number;
+}
+
+export interface MsgAckPayload {
+  msgId: string;
+  chatId: string;
+  status: "delivered" | "read";
+}
+
+export interface TypingPayload {
+  chatId: string;
+  isTyping: boolean;
+}
+
+export interface HistoryFetchPayload {
+  chatId: string;
+  sinceTs: number;
+  limit?: number;
 }
 
 export function isEnvelope(value: unknown): value is Envelope {

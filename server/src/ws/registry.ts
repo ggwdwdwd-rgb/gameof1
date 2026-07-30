@@ -33,6 +33,14 @@ export function broadcastToAllExcept(excludeDeviceId: string, envelope: Envelope
   }
 }
 
+/** true, если получатель был онлайн и пакет реально ушёл (иначе он останется только в БД до history.fetch). */
+export function sendToDevice(deviceId: string, envelope: Envelope): boolean {
+  const conn = connections.get(deviceId);
+  if (!conn) return false;
+  send(conn.socket, envelope);
+  return true;
+}
+
 export function connectedDeviceCount(): number {
   return connections.size;
 }

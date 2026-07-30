@@ -34,6 +34,7 @@ CREATE TABLE messages (
   ciphertext      BLOB NOT NULL,
   nonce           BLOB NOT NULL,
   reply_to        TEXT,
+  key_version     INTEGER,
   created_at      INTEGER NOT NULL,
   ttl_expires_at  INTEGER NOT NULL,
   deleted_at      INTEGER

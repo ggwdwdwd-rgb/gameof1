@@ -1,0 +1,249 @@
+import { getCrypto } from "../crypto/sodium";
+import { enqueueOutbox, listOutbox, removeFromOutbox } from "../db/outbox";
+import { Emitter } from "../util/emitter";
+import { uuidv4 } from "../util/uuid";
+import {
+  isEnvelope,
+  type AuthChallengePayload,
+  type AuthErrorPayload,
+  type AuthOkPayload,
+  type ErrorPayload,
+  type HistoryPagePayload,
+  type InviteRedeemErrorPayload,
+  type InviteRedeemOkPayload,
+  type MemberJoinedPayload,
+  type MsgAcceptedPayload,
+  type MsgAckRelayPayload,
+  type MsgDeliverPayload,
+  type MsgSendPayload,
+  type RosterSnapshotPayload,
+  type TypingRelayPayload,
+} from "./protocol";
+
+export type ConnectionState = "idle" | "connecting" | "connected" | "reconnecting";
+
+export type AuthMode =
+  | { kind: "device"; deviceId: string; identitySecretKey: string }
+  | {
+      kind: "invite";
+      code: string;
+      deviceId: string;
+      displayName: string;
+      identityPublicKey: string;
+      encryptionPublicKey: string;
+    };
+
+interface WsClientEvents extends Record<string, (...args: never[]) => void> {
+  state: (state: ConnectionState) => void;
+  authOk: (payload: AuthOkPayload) => void;
+  authError: (payload: AuthErrorPayload) => void;
+  inviteOk: (payload: InviteRedeemOkPayload) => void;
+  inviteError: (payload: InviteRedeemErrorPayload) => void;
+  roster: (payload: RosterSnapshotPayload) => void;
+  memberJoined: (payload: MemberJoinedPayload) => void;
+  msgDeliver: (payload: MsgDeliverPayload) => void;
+  msgAccepted: (payload: MsgAcceptedPayload) => void;
+  ackRelay: (payload: MsgAckRelayPayload) => void;
+  typingRelay: (payload: TypingRelayPayload) => void;
+  historyPage: (payload: HistoryPagePayload) => void;
+  errorPacket: (payload: ErrorPayload) => void;
+}
+
+const PING_INTERVAL_MS = 30_000;
+const MAX_RECONNECT_DELAY_MS = 30_000;
+
+/**
+ * Один WS-клиент на приложение: авторизация (по подписи либо по инвайту),
+ * реконнект с экспоненциальной задержкой, keepalive-пинги, очередь исходящих
+ * (outbox в sqlite — переживает обрыв связи и перезапуск приложения).
+ */
+export class WsClient {
+  readonly events = new Emitter<WsClientEvents>();
+  state: ConnectionState = "idle";
+
+  private ws: WebSocket | null = null;
+  private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private closedByUser = false;
+
+  constructor(
+    private readonly serverUrl: string,
+    private readonly authMode: AuthMode,
+  ) {}
+
+  connect(): void {
+    this.closedByUser = false;
+    this.setState(this.reconnectAttempt > 0 ? "reconnecting" : "connecting");
+
+    const ws = new WebSocket(this.serverUrl);
+    this.ws = ws;
+    ws.onmessage = (event) => {
+      void this.handleMessage(String(event.data));
+    };
+    ws.onclose = () => this.handleClose();
+    ws.onerror = () => {
+      // onclose вызовется следом — реконнект планируется там
+    };
+  }
+
+  disconnect(): void {
+    this.closedByUser = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.stopPing();
+    this.ws?.close();
+    this.ws = null;
+  }
+
+  /** Отправка через outbox — переживает офлайн и перезапуск приложения (см. ARCHITECTURE.md §6). */
+  async sendMessage(payload: MsgSendPayload): Promise<void> {
+    const envelope = { v: 1 as const, type: "msg.send", id: uuidv4(), ts: Date.now(), payload };
+    await enqueueOutbox(payload.clientMsgId, envelope);
+    this.trySendRaw(envelope);
+  }
+
+  ackMessage(msgId: string, chatId: string, status: "delivered" | "read"): void {
+    if (this.ws) this.rawSend(this.ws, "msg.ack", { msgId, chatId, status });
+  }
+
+  sendTyping(chatId: string, isTyping: boolean): void {
+    if (this.ws) this.rawSend(this.ws, "typing", { chatId, isTyping });
+  }
+
+  fetchHistory(chatId: string, sinceTs: number): void {
+    if (this.ws) this.rawSend(this.ws, "history.fetch", { chatId, sinceTs, limit: 200 });
+  }
+
+  private setState(state: ConnectionState): void {
+    this.state = state;
+    this.events.emit("state", state);
+  }
+
+  private async handleMessage(raw: string): Promise<void> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!isEnvelope(parsed)) return;
+
+    switch (parsed.type) {
+      case "auth.challenge":
+        await this.respondToChallenge((parsed.payload as AuthChallengePayload).nonce);
+        return;
+      case "auth.ok":
+        this.onAuthenticated();
+        this.events.emit("authOk", parsed.payload as AuthOkPayload);
+        return;
+      case "auth.error":
+        this.events.emit("authError", parsed.payload as AuthErrorPayload);
+        return;
+      case "invite.redeem.ok":
+        this.onAuthenticated();
+        this.events.emit("inviteOk", parsed.payload as InviteRedeemOkPayload);
+        return;
+      case "invite.redeem.error":
+        this.events.emit("inviteError", parsed.payload as InviteRedeemErrorPayload);
+        return;
+      case "roster.snapshot":
+        this.events.emit("roster", parsed.payload as RosterSnapshotPayload);
+        return;
+      case "member.joined":
+        this.events.emit("memberJoined", parsed.payload as MemberJoinedPayload);
+        return;
+      case "msg.deliver":
+        this.events.emit("msgDeliver", parsed.payload as MsgDeliverPayload);
+        return;
+      case "msg.accepted": {
+        const payload = parsed.payload as MsgAcceptedPayload;
+        await removeFromOutbox(payload.clientMsgId);
+        this.events.emit("msgAccepted", payload);
+        return;
+      }
+      case "msg.ackRelay":
+        this.events.emit("ackRelay", parsed.payload as MsgAckRelayPayload);
+        return;
+      case "typing.relay":
+        this.events.emit("typingRelay", parsed.payload as TypingRelayPayload);
+        return;
+      case "history.page":
+        this.events.emit("historyPage", parsed.payload as HistoryPagePayload);
+        return;
+      case "pong":
+        return;
+      case "error":
+        this.events.emit("errorPacket", parsed.payload as ErrorPayload);
+        return;
+    }
+  }
+
+  private onAuthenticated(): void {
+    this.reconnectAttempt = 0;
+    this.setState("connected");
+    this.startPing();
+    void this.flushOutbox();
+  }
+
+  private async respondToChallenge(nonceB64: string): Promise<void> {
+    const ws = this.ws;
+    if (!ws) return;
+    if (this.authMode.kind === "device") {
+      const crypto = await getCrypto();
+      const signature = crypto.signDetached(nonceB64, this.authMode.identitySecretKey);
+      this.rawSend(ws, "auth.response", { deviceId: this.authMode.deviceId, signature });
+    } else {
+      this.rawSend(ws, "invite.redeem", {
+        code: this.authMode.code,
+        deviceId: this.authMode.deviceId,
+        displayName: this.authMode.displayName,
+        identityPublicKey: this.authMode.identityPublicKey,
+        encryptionPublicKey: this.authMode.encryptionPublicKey,
+      });
+    }
+  }
+
+  private rawSend(ws: WebSocket, type: string, payload: unknown): void {
+    ws.send(JSON.stringify({ v: 1, type, id: uuidv4(), ts: Date.now(), payload }));
+  }
+
+  private trySendRaw(envelope: unknown): void {
+    if (this.ws && this.ws.readyState === this.ws.OPEN) {
+      this.ws.send(JSON.stringify(envelope));
+    }
+  }
+
+  private async flushOutbox(): Promise<void> {
+    const items = await listOutbox();
+    for (const item of items) this.trySendRaw(item.payload);
+  }
+
+  private handleClose(): void {
+    this.ws = null;
+    this.stopPing();
+    if (this.closedByUser) {
+      this.setState("idle");
+      return;
+    }
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    this.setState("reconnecting");
+    const delayMs = Math.min(MAX_RECONNECT_DELAY_MS, 1000 * 2 ** this.reconnectAttempt);
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = setTimeout(() => this.connect(), delayMs);
+  }
+
+  private startPing(): void {
+    this.stopPing();
+    this.pingTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === this.ws.OPEN) this.rawSend(this.ws, "ping", {});
+    }, PING_INTERVAL_MS);
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = null;
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@family-messenger/crypto": "file:../packages/crypto",
+    "expo": "~57.0.9",
+    "expo-camera": "~57.0.3",
+    "expo-secure-store": "~57.0.1",
+    "expo-sqlite": "~57.0.1",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-libsodium": "^1.7.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "build-crypto-dep": "npm run build --prefix ../packages/crypto",
+    "start": "npm run build-crypto-dep && expo start",
+    "android": "npm run build-crypto-dep && expo start --android",
+    "ios": "npm run build-crypto-dep && expo start --ios",
+    "web": "npm run build-crypto-dep && expo start --web"
+  },
+  "private": true
+}

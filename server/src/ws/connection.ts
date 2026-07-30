@@ -3,9 +3,27 @@ import type { WebSocket } from "ws";
 import type { FastifyBaseLogger } from "fastify";
 import { randomNonceB64 } from "../crypto/verify.js";
 import { handleAuthResponse } from "./handlers/auth.js";
+import { recipientDeviceIds } from "./handlers/chat.js";
 import { handleInviteRedeem } from "./handlers/invite.js";
-import { broadcastToAllExcept, registerConnection, send, unregisterConnection } from "./registry.js";
-import { isEnvelope, type AuthResponsePayload, type Envelope, type InviteRedeemPayload } from "./types.js";
+import { handleHistoryFetch, handleMsgAck, handleMsgSend } from "./handlers/message.js";
+import { getRosterExcluding } from "./handlers/roster.js";
+import {
+  broadcastToAllExcept,
+  registerConnection,
+  send,
+  sendToDevice,
+  unregisterConnection,
+} from "./registry.js";
+import {
+  isEnvelope,
+  type AuthResponsePayload,
+  type Envelope,
+  type HistoryFetchPayload,
+  type InviteRedeemPayload,
+  type MsgAckPayload,
+  type MsgSendPayload,
+  type TypingPayload,
+} from "./types.js";
 
 type ConnState =
   | { stage: "awaiting_auth"; nonce: string }
@@ -52,6 +70,7 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           state = { stage: "authenticated", userId: result.userId, deviceId: result.deviceId };
           registerConnection(result.deviceId, result.userId, socket);
           send(socket, envelope("auth.ok", { userId: result.userId, deviceId: result.deviceId, serverTime: Date.now() }));
+          send(socket, envelope("roster.snapshot", { members: getRosterExcluding(result.deviceId) }));
           log.info({ userId: result.userId, deviceId: result.deviceId }, "устройство аутентифицировано");
           return;
         }
@@ -66,6 +85,7 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           state = { stage: "authenticated", userId: result.userId, deviceId: payload.deviceId };
           registerConnection(payload.deviceId, result.userId, socket);
           send(socket, envelope("invite.redeem.ok", { userId: result.userId }));
+          send(socket, envelope("roster.snapshot", { members: getRosterExcluding(payload.deviceId) }));
           broadcastToAllExcept(
             payload.deviceId,
             envelope("member.joined", {
@@ -86,14 +106,59 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
       }
 
       // authenticated
+      const { userId, deviceId } = state;
+
       if (parsed.type === "ping") {
         send(socket, envelope("pong", {}));
         return;
       }
 
-      // Этап 1: полноценной маршрутизации сообщений ещё нет (msg.send/history.fetch и т.д. —
-      // Этап 3-4). Пока просто эхо — подтверждает, что транспорт и аутентификация работают.
-      send(socket, envelope(`${parsed.type}.echo`, parsed.payload));
+      if (parsed.type === "msg.send") {
+        const payload = parsed.payload as MsgSendPayload;
+        const result = handleMsgSend(userId, deviceId, payload);
+        if (!result.ok) {
+          send(socket, envelope("error", { code: result.code, message: "Сообщение не принято" }));
+          return;
+        }
+        send(socket, envelope("msg.accepted", { clientMsgId: payload.clientMsgId, msgId: result.message.msgId }));
+        for (const recipientDeviceId of recipientDeviceIds(payload.chatId, userId)) {
+          sendToDevice(recipientDeviceId, envelope("msg.deliver", result.message));
+        }
+        return;
+      }
+
+      if (parsed.type === "msg.ack") {
+        const payload = parsed.payload as MsgAckPayload;
+        const result = handleMsgAck(userId, payload);
+        if (result) {
+          sendToDevice(
+            result.fromDeviceId,
+            envelope("msg.ackRelay", { msgId: payload.msgId, chatId: payload.chatId, byUserId: userId, status: payload.status, ts: Date.now() }),
+          );
+        }
+        return;
+      }
+
+      if (parsed.type === "typing") {
+        const payload = parsed.payload as TypingPayload;
+        for (const recipientDeviceId of recipientDeviceIds(payload.chatId, userId)) {
+          sendToDevice(recipientDeviceId, envelope("typing.relay", { chatId: payload.chatId, fromUserId: userId, isTyping: payload.isTyping }));
+        }
+        return;
+      }
+
+      if (parsed.type === "history.fetch") {
+        const payload = parsed.payload as HistoryFetchPayload;
+        const messages = handleHistoryFetch(userId, payload);
+        if (messages === null) {
+          send(socket, envelope("error", { code: "NOT_PARTICIPANT", message: "Нет доступа к этому чату" }));
+          return;
+        }
+        send(socket, envelope("history.page", { chatId: payload.chatId, messages, nextCursor: null }));
+        return;
+      }
+
+      send(socket, envelope("error", { code: "UNKNOWN_TYPE", message: `Неизвестный тип пакета: ${parsed.type}` }));
     })().catch((err: unknown) => {
       log.error({ err }, "ошибка обработки WS-пакета");
     });
