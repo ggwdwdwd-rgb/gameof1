@@ -6,8 +6,16 @@ import type { InviteCreatedPayload } from "../net/protocol";
 import { useTheme } from "../theme/ThemeContext";
 import { Header } from "../ui/Header";
 
+const INVITE_ERRORS: Record<"OFFLINE" | "TIMEOUT" | "SERVER_OUTDATED", string> = {
+  OFFLINE: "Нет соединения с сервером — код можно создать только онлайн.",
+  TIMEOUT: "Сервер не ответил вовремя. Попробуйте ещё раз.",
+  SERVER_OUTDATED:
+    "Сервер работает на старой версии и не умеет выпускать коды. Обновите его на VPS:\n\n" +
+    "cd family-messenger && git pull && docker compose up -d --build",
+};
+
 export function AddPersonScreen({ onBack }: { onBack: () => void }): React.ReactElement {
-  const { createInvite, identity, connectionState } = useApp();
+  const { createInvite, identity } = useApp();
   const theme = useTheme();
   const [invite, setInvite] = useState<InviteCreatedPayload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -16,18 +24,21 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
   const generate = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const result = await createInvite();
-    if (!result) {
-      setError(
-        connectionState === "connected"
-          ? "Сервер не ответил. Попробуйте ещё раз."
-          : "Нет соединения с сервером — код можно создать только онлайн.",
-      );
-    } else {
-      setInvite(result);
+    try {
+      const result = await createInvite();
+      if (result.ok) {
+        setInvite(result.invite);
+      } else {
+        setError(INVITE_ERRORS[result.reason]);
+      }
+    } catch {
+      setError("Не удалось создать код — попробуйте ещё раз.");
+    } finally {
+      // Снимаем индикатор в любом случае: раньше исключение оставляло
+      // экран в бесконечной загрузке.
+      setLoading(false);
     }
-    setLoading(false);
-  }, [createInvite, connectionState]);
+  }, [createInvite]);
 
   useEffect(() => {
     void generate();

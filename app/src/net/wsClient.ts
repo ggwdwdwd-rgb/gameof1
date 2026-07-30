@@ -128,8 +128,10 @@ export class WsClient {
     this.rawSend(this.ws, "typing", { chatId, isTyping });
   }
 
-  requestInvite(ttlHours?: number): void {
-    if (this.ws) this.rawSend(this.ws, "invite.create", ttlHours ? { ttlHours } : {});
+  /** false, если пакет не удалось отправить (нет открытого соединения). */
+  requestInvite(ttlHours?: number): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "invite.create", ttlHours ? { ttlHours } : {});
   }
 
   fetchHistory(chatId: string, sinceTs: number): void {
@@ -235,13 +237,32 @@ export class WsClient {
     }
   }
 
-  private rawSend(ws: WebSocket, type: string, payload: unknown): void {
-    ws.send(JSON.stringify({ v: 1, type, id: uuidv4(), ts: Date.now(), payload }));
+  /** true, если соединение реально открыто и в него можно писать. */
+  isOpen(): boolean {
+    return this.ws !== null && this.ws.readyState === this.ws.OPEN;
+  }
+
+  /**
+   * Отправка не должна бросать исключение: WebSocket.send() на уже закрытом
+   * сокете кидает ошибку, и она раньше всплывала наружу как unhandled
+   * rejection (например, экран добавления человека висел в загрузке навсегда).
+   */
+  private rawSend(ws: WebSocket, type: string, payload: unknown): boolean {
+    if (ws.readyState !== ws.OPEN) return false;
+    try {
+      ws.send(JSON.stringify({ v: 1, type, id: uuidv4(), ts: Date.now(), payload }));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private trySendRaw(envelope: unknown): void {
-    if (this.ws && this.ws.readyState === this.ws.OPEN) {
+    if (!this.isOpen() || !this.ws) return;
+    try {
       this.ws.send(JSON.stringify(envelope));
+    } catch {
+      // соединение оборвалось между проверкой и записью — пакет останется в outbox
     }
   }
 

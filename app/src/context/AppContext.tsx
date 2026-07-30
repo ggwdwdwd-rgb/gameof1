@@ -35,6 +35,10 @@ interface ChatEvents extends Record<string, (...args: never[]) => void> {
 
 export type SendResult = { ok: true } | { ok: false; reason: "NO_CONTACT" | "NOT_READY" };
 
+export type CreateInviteResult =
+  | { ok: true; invite: InviteCreatedPayload }
+  | { ok: false; reason: "OFFLINE" | "TIMEOUT" | "SERVER_OUTDATED" };
+
 interface AppContextValue {
   identity: DeviceIdentity;
   connectionState: ConnectionState;
@@ -54,7 +58,7 @@ interface AppContextValue {
   markRead: (msgId: string, chatId: string) => void;
   setTyping: (chatId: string, isTyping: boolean) => void;
   loadMessages: (chatId: string) => Promise<LocalMessage[]>;
-  createInvite: () => Promise<InviteCreatedPayload | null>;
+  createInvite: () => Promise<CreateInviteResult>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -280,18 +284,31 @@ export function AppProvider({
       loadMessages: (chatId) => listMessagesForChat(chatId),
       createInvite() {
         const ws = wsRef.current;
-        if (!ws) return Promise.resolve(null);
-        return new Promise<InviteCreatedPayload | null>((resolve) => {
-          const timeout = setTimeout(() => {
-            unsubscribe();
-            resolve(null);
-          }, 12_000);
-          const unsubscribe = ws.events.on("inviteCreated", (payload) => {
+        if (!ws || !ws.isOpen()) return Promise.resolve<CreateInviteResult>({ ok: false, reason: "OFFLINE" });
+
+        return new Promise<CreateInviteResult>((resolve) => {
+          let settled = false;
+          const finish = (result: CreateInviteResult): void => {
+            if (settled) return;
+            settled = true;
             clearTimeout(timeout);
-            unsubscribe();
-            resolve(payload);
+            offCreated();
+            offError();
+            resolve(result);
+          };
+
+          const timeout = setTimeout(() => finish({ ok: false, reason: "TIMEOUT" }), 12_000);
+
+          const offCreated = ws.events.on("inviteCreated", (payload) => finish({ ok: true, invite: payload }));
+
+          // Старая версия сервера не знает пакет invite.create и отвечает
+          // UNKNOWN_TYPE — без этой ветки экран ждал бы таймаут и не объяснил,
+          // что именно нужно сделать (обновить сервер).
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") finish({ ok: false, reason: "SERVER_OUTDATED" });
           });
-          ws.requestInvite();
+
+          if (!ws.requestInvite()) finish({ ok: false, reason: "OFFLINE" });
         });
       },
     };
