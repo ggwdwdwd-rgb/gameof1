@@ -123,6 +123,19 @@ docker compose up -d --build
 Первый запуск соберёт образ сервера (несколько минут) и поднимет Caddy,
 который автоматически запросит сертификат Let's Encrypt для `DOMAIN`.
 
+Если сборка упала с `429 Too Many Requests` от `registry-1.docker.io` — это
+лимит анонимных скачиваний Docker Hub для IP твоего VPS (часто «съедается»
+соседями по облаку), а не проблема кода. Собери через зеркало Google, оно
+без лимита и не требует регистрации:
+
+```bash
+NODE_IMAGE=mirror.gcr.io/library/node:20-bookworm \
+NODE_SLIM_IMAGE=mirror.gcr.io/library/node:20-bookworm-slim \
+docker compose up -d --build
+```
+
+Чтобы не набирать это каждый раз, те же две строки можно добавить в `.env`.
+
 Проверка:
 
 ```bash

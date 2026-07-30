@@ -1,6 +1,14 @@
 services:
   server:
-    build: ./server
+    build:
+      context: ./server
+      # Если Docker Hub ответит 429 Too Many Requests, соберите через зеркало:
+      #   NODE_IMAGE=mirror.gcr.io/library/node:20-bookworm \
+      #   NODE_SLIM_IMAGE=mirror.gcr.io/library/node:20-bookworm-slim \
+      #   docker compose up -d --build
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:20-bookworm}
+        NODE_SLIM_IMAGE: ${NODE_SLIM_IMAGE:-node:20-bookworm-slim}
     restart: unless-stopped
     environment:
       PORT: 8080

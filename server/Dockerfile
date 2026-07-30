@@ -1,6 +1,12 @@
+# Базовые образы задаются аргументами: Docker Hub периодически отвечает
+# "429 Too Many Requests" на анонимные скачивания с облачных IP, и тогда сборку
+# спасает зеркало, например mirror.gcr.io (см. docs/DEPLOY.md).
+ARG NODE_IMAGE=node:20-bookworm
+ARG NODE_SLIM_IMAGE=node:20-bookworm-slim
+
 # Стадия сборки: нужны python3/make/g++ на случай, если для better-sqlite3
 # не найдётся готовый прекомпилированный бинарник под платформу VPS.
-FROM node:20-bookworm AS builder
+FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -16,7 +22,7 @@ COPY src ./src
 RUN npm run build
 
 # Финальный образ — тонкий, без компиляторов, но node_modules переносим целиком.
-FROM node:20-bookworm-slim AS runtime
+FROM ${NODE_SLIM_IMAGE} AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
