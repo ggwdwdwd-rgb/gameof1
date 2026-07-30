@@ -60,74 +60,88 @@ describe("подпись auth-челленджа (Ed25519)", () => {
   });
 });
 
-describe("согласование общего секрета (X25519 ECDH)", () => {
-  it("shared key одинаковый с обеих сторон", () => {
+describe("парное шифрование сообщений (NaCl box)", () => {
+  it("получатель расшифровывает сообщение отправителя", () => {
     const alice = crypto.generateEncryptionKeyPair();
     const bob = crypto.generateEncryptionKeyPair();
-    const sharedByAlice = crypto.deriveSharedKey(alice.secretKey, bob.publicKey);
-    const sharedByBob = crypto.deriveSharedKey(bob.secretKey, alice.publicKey);
-    expect(sharedByAlice).toBe(sharedByBob);
-  });
-
-  it("разные пары дают разный shared key", () => {
-    const alice = crypto.generateEncryptionKeyPair();
-    const bob = crypto.generateEncryptionKeyPair();
-    const carol = crypto.generateEncryptionKeyPair();
-    const sharedAB = crypto.deriveSharedKey(alice.secretKey, bob.publicKey);
-    const sharedAC = crypto.deriveSharedKey(alice.secretKey, carol.publicKey);
-    expect(sharedAB).not.toBe(sharedAC);
-  });
-});
-
-describe("шифрование сообщений (XChaCha20-Poly1305)", () => {
-  it("расшифровка возвращает исходный текст", () => {
-    const alice = crypto.generateEncryptionKeyPair();
-    const bob = crypto.generateEncryptionKeyPair();
-    const key = crypto.deriveSharedKey(alice.secretKey, bob.publicKey);
 
     const plaintext = "Привет! Ужин в 19:00 🍲";
-    const payload = crypto.encryptWithKey(plaintext, key);
-    const decrypted = crypto.decryptWithKey(payload, key);
+    const payload = crypto.boxEncrypt(plaintext, bob.publicKey, alice.secretKey);
 
-    expect(decrypted).toBe(plaintext);
+    expect(crypto.boxOpen(payload, alice.publicKey, bob.secretKey)).toBe(plaintext);
+  });
+
+  it("автор расшифровывает своё же сообщение (сценарий истории после переустановки)", () => {
+    const alice = crypto.generateEncryptionKeyPair();
+    const bob = crypto.generateEncryptionKeyPair();
+
+    const plaintext = "моё сообщение из истории";
+    const payload = crypto.boxEncrypt(plaintext, bob.publicKey, alice.secretKey);
+
+    // Ключ пары симметричен: (bob.pub, alice.sec) === (alice.pub, bob.sec).
+    expect(crypto.boxOpen(payload, bob.publicKey, alice.secretKey)).toBe(plaintext);
+  });
+
+  it("посторонний не может расшифровать", () => {
+    const alice = crypto.generateEncryptionKeyPair();
+    const bob = crypto.generateEncryptionKeyPair();
+    const eve = crypto.generateEncryptionKeyPair();
+
+    const payload = crypto.boxEncrypt("секрет", bob.publicKey, alice.secretKey);
+    expect(() => crypto.boxOpen(payload, alice.publicKey, eve.secretKey)).toThrow();
   });
 
   it("каждое сообщение шифруется новым nonce", () => {
-    const key = crypto.generateGroupKey();
-    const a = crypto.encryptWithKey("одно и то же сообщение", key);
-    const b = crypto.encryptWithKey("одно и то же сообщение", key);
+    const alice = crypto.generateEncryptionKeyPair();
+    const bob = crypto.generateEncryptionKeyPair();
+
+    const a = crypto.boxEncrypt("одно и то же сообщение", bob.publicKey, alice.secretKey);
+    const b = crypto.boxEncrypt("одно и то же сообщение", bob.publicKey, alice.secretKey);
+
     expect(a.nonce).not.toBe(b.nonce);
     expect(a.ciphertext).not.toBe(b.ciphertext);
   });
 
-  it("подмена шифротекста ломает AEAD-тег — decrypt бросает исключение", () => {
-    const key = crypto.generateGroupKey();
-    const payload = crypto.encryptWithKey("не трогай меня", key);
+  it("nonce имеет длину crypto_box_NONCEBYTES", () => {
+    const alice = crypto.generateEncryptionKeyPair();
+    const bob = crypto.generateEncryptionKeyPair();
+    const payload = crypto.boxEncrypt("текст", bob.publicKey, alice.secretKey);
+    expect(sodium.from_base64(payload.nonce)).toHaveLength(sodium.crypto_box_NONCEBYTES);
+  });
+
+  it("подмена шифротекста ломает тег — расшифровка бросает исключение", () => {
+    const alice = crypto.generateEncryptionKeyPair();
+    const bob = crypto.generateEncryptionKeyPair();
+
+    const payload = crypto.boxEncrypt("не трогай меня", bob.publicKey, alice.secretKey);
     const raw = sodium.from_base64(payload.ciphertext);
     raw[0] = raw[0]! ^ 0xff; // портим один байт
     const tampered = { ciphertext: sodium.to_base64(raw), nonce: payload.nonce };
 
-    expect(() => crypto.decryptWithKey(tampered, key)).toThrow();
+    expect(() => crypto.boxOpen(tampered, alice.publicKey, bob.secretKey)).toThrow();
   });
 
-  it("расшифровка неверным ключом бросает исключение", () => {
-    const key = crypto.generateGroupKey();
-    const wrongKey = crypto.generateGroupKey();
-    const payload = crypto.encryptWithKey("секрет семьи", key);
-    expect(() => crypto.decryptWithKey(payload, wrongKey)).toThrow();
+  it("подмена nonce ломает расшифровку", () => {
+    const alice = crypto.generateEncryptionKeyPair();
+    const bob = crypto.generateEncryptionKeyPair();
+
+    const payload = crypto.boxEncrypt("сообщение", bob.publicKey, alice.secretKey);
+    const otherNonce = sodium.to_base64(sodium.randombytes_buf(sodium.crypto_box_NONCEBYTES));
+
+    expect(() => crypto.boxOpen({ ciphertext: payload.ciphertext, nonce: otherNonce }, alice.publicKey, bob.secretKey)).toThrow();
+  });
+
+  it("работает на длинном тексте (проверка объёмных вложений)", () => {
+    const alice = crypto.generateEncryptionKeyPair();
+    const bob = crypto.generateEncryptionKeyPair();
+
+    const long = "x".repeat(200_000);
+    const payload = crypto.boxEncrypt(long, bob.publicKey, alice.secretKey);
+    expect(crypto.boxOpen(payload, alice.publicKey, bob.secretKey)).toBe(long);
   });
 });
 
-describe("групповой ключ", () => {
-  it("сгенерированный групповой ключ имеет длину 32 байта и работает с encrypt/decrypt", () => {
-    const key = crypto.generateGroupKey();
-    expect(sodium.from_base64(key)).toHaveLength(32);
-    const payload = crypto.encryptWithKey("список покупок: молоко, хлеб", key);
-    expect(crypto.decryptWithKey(payload, key)).toBe("список покупок: молоко, хлеб");
-  });
-});
-
-describe("fingerprint (экран «Семья»)", () => {
+describe("fingerprint (сверка ключей вслух)", () => {
   it("детерминирован для одного и того же ключа", () => {
     const kp = crypto.generateIdentityKeyPair();
     expect(crypto.computeFingerprint(kp.publicKey)).toBe(crypto.computeFingerprint(kp.publicKey));
@@ -147,14 +161,58 @@ describe("fingerprint (экран «Семья»)", () => {
 });
 
 /**
- * Golden-векторы: ключи получены детерминировано из фиксированного seed
- * (crypto_box_seed_keypair/crypto_sign_seed_keypair), ожидаемые значения
- * зафиксированы заранее прогоном той же связки libsodium. Это не официальные
- * NIST/IETF-векторы (для XChaCha20-Poly1305-IETF таких общедоступных векторов
- * с этой конкретной комбинацией ключ/nonce нет) — назначение теста другое:
- * поймать регрессию, если вызовы sodium в этом пакете вдруг перестанут быть
- * побайтово совместимы (не тот порядок аргументов AEAD, не та переменная
- * nonce/lib и т.д.), а не проверить сам алгоритм XChaCha20-Poly1305.
+ * Пакет обязан пользоваться только теми примитивами, которые есть в
+ * react-native-libsodium: именно из-за отсутствующего там crypto_box_beforenm
+ * отправка сообщений на устройстве падала, хотя тесты в Node проходили.
+ * Этот тест фиксирует список и не даёт снова взять недоступную функцию.
+ */
+describe("совместимость с react-native-libsodium", () => {
+  const AVAILABLE_ON_DEVICE = new Set([
+    "ready",
+    "crypto_sign_keypair",
+    "crypto_sign_detached",
+    "crypto_sign_verify_detached",
+    "crypto_box_keypair",
+    "crypto_box_easy",
+    "crypto_box_open_easy",
+    "crypto_generichash",
+    "randombytes_buf",
+    "to_base64",
+    "from_base64",
+    "from_string",
+    "to_string",
+    "crypto_box_NONCEBYTES",
+    "crypto_box_SECRETKEYBYTES",
+  ]);
+
+  it("createCrypto обращается только к доступным на устройстве функциям", () => {
+    const used = new Set<string>();
+    const probe = new Proxy(sodium as unknown as Record<string, unknown>, {
+      get(target, prop: string) {
+        used.add(prop);
+        return target[prop];
+      },
+    }) as unknown as SodiumLike;
+
+    const probed = createCrypto(probe);
+    const identity = probed.generateIdentityKeyPair();
+    const encryption = probed.generateEncryptionKeyPair();
+    const peer = probed.generateEncryptionKeyPair();
+    const signed = probed.signDetached(sodium.to_base64(sodium.randombytes_buf(32)), identity.secretKey);
+    probed.verifyDetached(signed, sodium.to_base64(sodium.randombytes_buf(32)), identity.publicKey);
+    const payload = probed.boxEncrypt("проверка", peer.publicKey, encryption.secretKey);
+    probed.boxOpen(payload, encryption.publicKey, peer.secretKey);
+    probed.computeFingerprint(identity.publicKey);
+
+    const forbidden = [...used].filter((name) => !AVAILABLE_ON_DEVICE.has(name));
+    expect(forbidden).toEqual([]);
+  });
+});
+
+/**
+ * Golden-векторы на фиксированных seed-ключах: ловят регрессию, если вызовы
+ * sodium в этом пакете перестанут быть побайтово совместимы (не тот порядок
+ * аргументов, не та функция), а не проверяют сами алгоритмы.
  */
 describe("golden-векторы (защита от регрессий в обвязке над sodium)", () => {
   const seedA = new Uint8Array(32).fill(1);
@@ -172,32 +230,22 @@ describe("golden-векторы (защита от регрессий в обв�
     expect(sodium.crypto_sign_verify_detached(signature, message, signKeys.publicKey)).toBe(true);
   });
 
-  it("X25519 ECDH: shared key для фиксированной пары seed-ключей", () => {
+  it("NaCl box: шифротекст для фиксированных ключей, nonce и текста", () => {
     const boxA = sodium.crypto_box_seed_keypair(seedA);
     const boxB = sodium.crypto_box_seed_keypair(seedB);
-    const shared = sodium.crypto_box_beforenm(boxB.publicKey, boxA.privateKey);
+    const nonce = new Uint8Array(sodium.crypto_box_NONCEBYTES).fill(7);
 
-    expect(sodium.to_base64(shared)).toBe("EyWNz7BcELoWogBZNrLUyssB7j74OgiHq9Y-SguAs_Q");
-  });
-
-  it("XChaCha20-Poly1305: шифротекст для фиксированных ключа/nonce/текста", () => {
-    const boxA = sodium.crypto_box_seed_keypair(seedA);
-    const boxB = sodium.crypto_box_seed_keypair(seedB);
-    const key = sodium.crypto_box_beforenm(boxB.publicKey, boxA.privateKey);
-    const nonce = new Uint8Array(24).fill(7);
-
-    const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    const ciphertext = sodium.crypto_box_easy(
       sodium.from_string("привет, семья"),
-      null,
-      null,
       nonce,
-      key,
+      boxB.publicKey,
+      boxA.privateKey,
     );
 
-    expect(sodium.to_base64(ciphertext)).toBe("G2Vsh95VK3OaUR7kMRbVlDvt75Bc1WUMKzYoHNtaya9tPVUtQJzuEg");
-
-    const decrypted = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ciphertext, null, nonce, key);
-    expect(sodium.to_string(decrypted)).toBe("привет, семья");
+    // Расшифровка второй стороной обязана давать исходный текст.
+    const opened = sodium.crypto_box_open_easy(ciphertext, nonce, boxA.publicKey, boxB.privateKey);
+    expect(sodium.to_string(opened)).toBe("привет, семья");
+    expect(sodium.to_base64(boxA.publicKey)).toBe("GxtY3VDqFLYNoXt5DNAnVNlwybq4ZOuzwPMBb-UdP1c");
   });
 
   it("fingerprint фиксированного публичного ключа", () => {

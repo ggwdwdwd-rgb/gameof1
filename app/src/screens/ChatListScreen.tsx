@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { dmChatId } from "../chat/chatId";
 import { useApp } from "../context/AppContext";
 import { getLastMessageForChat, type LocalMessage } from "../db/messages";
@@ -59,6 +60,7 @@ export function ChatListScreen({
 }): React.ReactElement {
   const { identity, connectionState, contacts, chatEvents } = useApp();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<ChatRow[]>([]);
 
   const refresh = useCallback(async () => {
@@ -102,7 +104,11 @@ export function ChatListScreen({
       <FlatList
         data={rows}
         keyExtractor={(row) => row.chatId}
-        contentContainerStyle={rows.length === 0 ? styles.emptyContainer : styles.list}
+        contentContainerStyle={[
+          rows.length === 0 ? styles.emptyContainer : styles.list,
+          // Кнопка «+» и панель навигации не должны перекрывать последний чат.
+          { paddingBottom: insets.bottom + 96 },
+        ]}
         renderItem={({ item }) => (
           <Pressable
             style={({ pressed }) => [
@@ -141,7 +147,7 @@ export function ChatListScreen({
       <Pressable
         style={({ pressed }) => [
           styles.fab,
-          { backgroundColor: theme.colors.accent, opacity: pressed ? 0.85 : 1 },
+          { bottom: insets.bottom + 24, backgroundColor: theme.colors.accent, opacity: pressed ? 0.85 : 1 },
         ]}
         onPress={onAddPerson}
       >
@@ -175,7 +181,6 @@ const styles = StyleSheet.create({
   fab: {
     position: "absolute",
     right: 20,
-    bottom: 32,
     width: 58,
     height: 58,
     borderRadius: 29,

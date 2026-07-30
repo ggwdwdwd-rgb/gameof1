@@ -1,6 +1,7 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import React, { useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getCrypto } from "../crypto/sodium";
 import { saveIdentity, type DeviceIdentity } from "../storage/identity";
 import { WsClient } from "../net/wsClient";
@@ -17,6 +18,7 @@ export function OnboardingScreen({
   onComplete: (identity: DeviceIdentity) => void;
 }): React.ReactElement {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const [stage, setStage] = useState<Stage>("form");
   const [code, setCode] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -146,9 +148,12 @@ export function OnboardingScreen({
   return (
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: theme.colors.background }]}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior="padding"
     >
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 32 }]}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={[styles.logo, { backgroundColor: theme.colors.accent }]}>
           <Text style={styles.logoText}>C</Text>
         </View>
@@ -223,7 +228,7 @@ export function OnboardingScreen({
 const styles = StyleSheet.create({
   container: { flex: 1 },
   centered: { alignItems: "center", justifyContent: "center", padding: 28 },
-  scroll: { padding: 24, paddingTop: 72, paddingBottom: 40 },
+  scroll: { padding: 24 },
   logo: { width: 68, height: 68, borderRadius: 20, alignSelf: "center", alignItems: "center", justifyContent: "center" },
   logoText: { color: "#fff", fontSize: 34, fontWeight: "700" },
   title: { fontSize: 28, fontWeight: "700", textAlign: "center", marginTop: 14 },
@@ -241,5 +246,5 @@ const styles = StyleSheet.create({
   scanOverlay: { flex: 1, alignItems: "center", justifyContent: "center", gap: 20 },
   scanFrame: { width: 240, height: 240, borderRadius: 24, borderWidth: 3, borderColor: "#ffffffcc" },
   scanHint: { color: "#fff", fontSize: 15, textAlign: "center", paddingHorizontal: 40 },
-  cancelButton: { position: "absolute", bottom: 42, left: 24, right: 24, borderRadius: 14, paddingVertical: 15, alignItems: "center" },
+  cancelButton: { position: "absolute", bottom: 32, left: 24, right: 24, borderRadius: 14, paddingVertical: 15, alignItems: "center" },
 });

@@ -10,13 +10,13 @@ export interface EncryptedForSend {
   nonce: string;
 }
 
-/** Общий секрет с контактом (симметричен: та же функция на обеих сторонах, см. ARCHITECTURE.md §2.2). */
-export function sharedKeyWithContact(crypto: Crypto, identity: DeviceIdentity, contact: Contact): string {
-  return crypto.deriveSharedKey(identity.encryptionSecretKey, contact.encryptionPublicKey);
-}
+export type EncryptError = "NO_CONTACT" | "CRYPTO_FAILED";
 
-export type EncryptError = "NO_CONTACT";
-
+/**
+ * Шифруем сообщение личного чата парным ключом (NaCl box). Собеседник
+ * определяется по chatId, а не по отправителю — это важно и для расшифровки
+ * своих же сообщений, пришедших обратно из истории.
+ */
 export function encryptForChat(
   crypto: Crypto,
   identity: DeviceIdentity,
@@ -24,12 +24,16 @@ export function encryptForChat(
   plaintext: string,
   contactsByUserId: Map<string, Contact>,
 ): EncryptedForSend | { error: EncryptError } {
-  const otherUserId = otherUserIdInDm(chatId, identity.userId);
-  const contact = otherUserId ? contactsByUserId.get(otherUserId) : undefined;
+  const contact = peerContact(identity, chatId, contactsByUserId);
   if (!contact) return { error: "NO_CONTACT" };
 
-  const sharedKey = sharedKeyWithContact(crypto, identity, contact);
-  return crypto.encryptWithKey(plaintext, sharedKey);
+  try {
+    return crypto.boxEncrypt(plaintext, contact.encryptionPublicKey, identity.encryptionSecretKey);
+  } catch {
+    // Явная ошибка вместо «тихого» исключения: раньше такое падение внутри
+    // обработчика приводило к тому, что сообщение просто исчезало.
+    return { error: "CRYPTO_FAILED" };
+  }
 }
 
 export interface DeliveredMessageForDecrypt {
@@ -45,16 +49,24 @@ export function decryptDeliveredMessage(
   message: DeliveredMessageForDecrypt,
   contactsByUserId: Map<string, Contact>,
 ): string | null {
+  const contact = peerContact(identity, message.chatId, contactsByUserId);
+  if (!contact) return null;
   try {
-    // Ключ ищем по собеседнику чата, а не по отправителю: иначе собственные
-    // сообщения, пришедшие обратно через history.fetch (после переустановки
-    // или на второй сессии), не расшифровывались бы — ключа "сам с собой" нет.
-    const peerUserId = otherUserIdInDm(message.chatId, identity.userId);
-    const contact = peerUserId ? contactsByUserId.get(peerUserId) : undefined;
-    if (!contact) return null;
-    const sharedKey = sharedKeyWithContact(crypto, identity, contact);
-    return crypto.decryptWithKey({ ciphertext: message.ciphertext, nonce: message.nonce }, sharedKey);
+    return crypto.boxOpen(
+      { ciphertext: message.ciphertext, nonce: message.nonce },
+      contact.encryptionPublicKey,
+      identity.encryptionSecretKey,
+    );
   } catch {
-    return null; // AEAD-тег не сошёлся — подмена/повреждение/не тот ключ
+    return null; // тег не сошёлся — подмена/повреждение/не тот ключ
   }
+}
+
+function peerContact(
+  identity: DeviceIdentity,
+  chatId: string,
+  contactsByUserId: Map<string, Contact>,
+): Contact | undefined {
+  const peerUserId = otherUserIdInDm(chatId, identity.userId);
+  return peerUserId ? contactsByUserId.get(peerUserId) : undefined;
 }

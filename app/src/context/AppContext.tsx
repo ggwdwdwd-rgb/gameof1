@@ -33,7 +33,7 @@ interface ChatEvents extends Record<string, (...args: never[]) => void> {
   typingChanged: (chatId: string, fromUserId: string, isTyping: boolean) => void;
 }
 
-export type SendResult = { ok: true } | { ok: false; reason: "NO_CONTACT" | "NOT_READY" };
+export type SendResult = { ok: true } | { ok: false; reason: "NO_CONTACT" | "NOT_READY" | "CRYPTO_FAILED" };
 
 export type CreateInviteResult =
   | { ok: true; invite: InviteCreatedPayload }

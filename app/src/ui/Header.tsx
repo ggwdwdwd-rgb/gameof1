@@ -1,5 +1,6 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme/ThemeContext";
 
 export function Header({
@@ -16,9 +17,19 @@ export function Header({
   left?: React.ReactNode;
 }): React.ReactElement {
   const theme = useTheme();
+  // Отступ сверху берём из системных инсетов, а не фиксированным числом:
+  // на Android приложение рисуется под строкой состояния (edge-to-edge).
+  const insets = useSafeAreaInsets();
   return (
     <View
-      style={[styles.container, { backgroundColor: theme.colors.surface, borderBottomColor: theme.colors.border }]}
+      style={[
+        styles.container,
+        {
+          paddingTop: insets.top + 10,
+          backgroundColor: theme.colors.surface,
+          borderBottomColor: theme.colors.border,
+        },
+      ]}
     >
       <View style={styles.side}>
         {onBack ? (
@@ -48,7 +59,6 @@ export function Header({
 
 const styles = StyleSheet.create({
   container: {
-    paddingTop: 52,
     paddingBottom: 12,
     paddingHorizontal: 12,
     flexDirection: "row",

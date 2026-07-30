@@ -1,5 +1,6 @@
 import React from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useApp } from "../context/AppContext";
 import { useTheme, useThemePreference } from "../theme/ThemeContext";
 import type { ThemePreference } from "../theme/theme";
@@ -15,13 +16,14 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
 export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactElement {
   const { identity, contacts, myFingerprint, connectionState } = useApp();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { preference, setPreference } = useThemePreference();
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <Header title="Настройки" onBack={onBack} />
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
         <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>Оформление</Text>
         <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
           {THEME_OPTIONS.map((option, index) => (

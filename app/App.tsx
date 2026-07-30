@@ -1,6 +1,7 @@
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppProvider } from "./src/context/AppContext";
 import { AddPersonScreen } from "./src/screens/AddPersonScreen";
 import { ChatListScreen } from "./src/screens/ChatListScreen";
@@ -73,9 +74,11 @@ function Root(): React.ReactElement {
 
 export default function App(): React.ReactElement {
   return (
-    <ThemeProvider>
-      <Root />
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <Root />
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 

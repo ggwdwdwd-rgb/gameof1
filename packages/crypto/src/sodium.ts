@@ -1,9 +1,11 @@
 /**
  * Минимальный интерфейс sodium, который реально использует этот пакет.
- * И `libsodium-wrappers` (сервер, тесты), и `react-native-libsodium` (клиент,
- * Этап 3) реализуют этот же набор функций с одинаковыми сигнатурами — пакет
- * не завязан на конкретный биндинг, вызывающий код сам передаёт готовый
- * инстанс через createCrypto(sodium).
+ *
+ * ВАЖНО: набор функций ограничен тем, что реализовано в `react-native-libsodium`
+ * (клиент). Эта библиотека покрывает лишь часть API `libsodium-wrappers`
+ * (сервер, тесты) — например, `crypto_box_beforenm` в ней отсутствует, поэтому
+ * парное шифрование сделано через `crypto_box_easy`, который есть в обеих.
+ * Проверка наличия функций на старте — в app/src/crypto/sodium.ts.
  */
 export interface SodiumLike {
   readonly ready: Promise<void>;
@@ -13,21 +15,17 @@ export interface SodiumLike {
   crypto_sign_verify_detached(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): boolean;
 
   crypto_box_keypair(): { publicKey: Uint8Array; privateKey: Uint8Array };
-  crypto_box_beforenm(publicKey: Uint8Array, secretKey: Uint8Array): Uint8Array;
-
-  crypto_aead_xchacha20poly1305_ietf_encrypt(
+  crypto_box_easy(
     message: Uint8Array,
-    additionalData: Uint8Array | null,
-    secretNonce: null,
-    publicNonce: Uint8Array,
-    key: Uint8Array,
+    nonce: Uint8Array,
+    publicKey: Uint8Array,
+    privateKey: Uint8Array,
   ): Uint8Array;
-  crypto_aead_xchacha20poly1305_ietf_decrypt(
-    secretNonce: null,
+  crypto_box_open_easy(
     ciphertext: Uint8Array,
-    additionalData: Uint8Array | null,
-    publicNonce: Uint8Array,
-    key: Uint8Array,
+    nonce: Uint8Array,
+    publicKey: Uint8Array,
+    privateKey: Uint8Array,
   ): Uint8Array;
 
   crypto_generichash(hashLength: number, message: Uint8Array): Uint8Array;
@@ -39,7 +37,6 @@ export interface SodiumLike {
   from_string(input: string): Uint8Array;
   to_string(input: Uint8Array): string;
 
-  readonly crypto_aead_xchacha20poly1305_ietf_NPUBBYTES: number;
-  readonly crypto_aead_xchacha20poly1305_ietf_KEYBYTES: number;
+  readonly crypto_box_NONCEBYTES: number;
   readonly crypto_box_SECRETKEYBYTES: number;
 }

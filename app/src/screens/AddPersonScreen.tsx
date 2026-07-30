@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, View
 import QRCode from "react-native-qrcode-svg";
 import { useApp } from "../context/AppContext";
 import type { InviteCreatedPayload } from "../net/protocol";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme/ThemeContext";
 import { Header } from "../ui/Header";
 
@@ -17,6 +18,7 @@ const INVITE_ERRORS: Record<"OFFLINE" | "TIMEOUT" | "SERVER_OUTDATED", string> =
 export function AddPersonScreen({ onBack }: { onBack: () => void }): React.ReactElement {
   const { createInvite, identity } = useApp();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const [invite, setInvite] = useState<InviteCreatedPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +63,7 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <Header title="Добавить человека" onBack={onBack} />
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
         {loading && <ActivityIndicator color={theme.colors.accent} style={styles.loader} />}
 
         {error && (

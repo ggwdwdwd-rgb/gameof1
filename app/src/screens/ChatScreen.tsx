@@ -21,6 +21,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { buildEnvelopeFromLocalFile, formatFileSize, parseLocalMediaMeta, persistLocalFile } from "../chat/media";
 import { getCurrentLocationOnce, pickAndCompressImage, pickFile } from "../chat/pickers";
 import { useApp, type SendResult } from "../context/AppContext";
@@ -148,6 +149,7 @@ export function ChatScreen({
   const { identity, contacts, chatEvents, sendText, sendMedia, sendLocation, deleteMessage, markRead, setTyping } =
     useApp();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
@@ -208,14 +210,15 @@ export function ChatScreen({
     return contacts.find((c) => c.userId === userId)?.displayName ?? "…";
   }
 
+  const SEND_ERRORS: Record<"NO_CONTACT" | "NOT_READY" | "CRYPTO_FAILED", string> = {
+    NO_CONTACT: "Данные собеседника ещё не получены с сервера. Дождитесь подключения и попробуйте снова.",
+    NOT_READY: "Приложение ещё инициализируется. Попробуйте через секунду.",
+    CRYPTO_FAILED: "Не удалось зашифровать сообщение. Переустановите приложение — возможно, повреждены ключи.",
+  };
+
   function reportIfFailed(result: SendResult): void {
     if (result.ok) return;
-    Alert.alert(
-      "Сообщение не отправлено",
-      result.reason === "NO_CONTACT"
-        ? "Данные собеседника ещё не получены с сервера. Дождитесь подключения и попробуйте снова."
-        : "Приложение ещё инициализируется. Попробуйте через секунду.",
-    );
+    Alert.alert("Сообщение не отправлено", SEND_ERRORS[result.reason]);
   }
 
   function handleDraftChange(value: string): void {
@@ -310,8 +313,10 @@ export function ChatScreen({
   return (
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: theme.colors.background }]}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={80}
+      // behavior нужен и на Android: приложение рисуется edge-to-edge, окно
+      // само не сжимается, поэтому без этого клавиатура закрывала ввод.
+      behavior="padding"
+      keyboardVerticalOffset={0}
     >
       <Header
         title={title}
@@ -420,7 +425,17 @@ export function ChatScreen({
         </View>
       )}
 
-      <View style={[styles.inputRow, { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.border }]}>
+      <View
+        style={[
+          styles.inputRow,
+          {
+            // Нижние кнопки навигации перекрывали строку ввода — добавляем инсет.
+            paddingBottom: 9 + insets.bottom,
+            backgroundColor: theme.colors.surface,
+            borderTopColor: theme.colors.border,
+          },
+        ]}
+      >
         <Pressable onPress={() => setAttachOpen((open) => !open)} hitSlop={10} style={styles.plusButton}>
           <Text style={[styles.plusIcon, { color: attachOpen ? theme.colors.accent : theme.colors.textSecondary }]}>
             {attachOpen ? "✕" : "＋"}
@@ -521,7 +536,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     gap: 8,
     paddingHorizontal: 10,
-    paddingVertical: 9,
+    paddingTop: 9,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   plusButton: { width: 38, height: 42, alignItems: "center", justifyContent: "center" },

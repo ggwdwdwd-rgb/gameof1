@@ -1,6 +1,6 @@
 // Импорты без .js-расширений: пакет резолвится Metro напрямую из исходников
 // (см. package.json), а Metro, в отличие от tsc, не подменяет .js на .ts.
-import { deriveSharedKey, decryptWithKey, encryptWithKey, generateGroupKey } from "./channel";
+import { boxEncrypt, boxOpen } from "./channel";
 import { computeFingerprint } from "./fingerprint";
 import { generateEncryptionKeyPair, generateIdentityKeyPair } from "./keys";
 import type { SodiumLike } from "./sodium";
@@ -21,12 +21,12 @@ export function createCrypto(sodium: SodiumLike) {
     signDetached: (messageB64: string, secretKeyB64: string) => signDetached(sodium, messageB64, secretKeyB64),
     verifyDetached: (signatureB64: string, messageB64: string, publicKeyB64: string) =>
       verifyDetached(sodium, signatureB64, messageB64, publicKeyB64),
-    deriveSharedKey: (mySecretKeyB64: string, theirPublicKeyB64: string) =>
-      deriveSharedKey(sodium, mySecretKeyB64, theirPublicKeyB64),
-    generateGroupKey: () => generateGroupKey(sodium),
-    encryptWithKey: (plaintext: string, keyB64: string) => encryptWithKey(sodium, plaintext, keyB64),
-    decryptWithKey: (payload: { ciphertext: string; nonce: string }, keyB64: string) =>
-      decryptWithKey(sodium, payload, keyB64),
+    /** Зашифровать для собеседника: его публичный X25519-ключ + мой приватный. */
+    boxEncrypt: (plaintext: string, theirPublicKeyB64: string, mySecretKeyB64: string) =>
+      boxEncrypt(sodium, plaintext, theirPublicKeyB64, mySecretKeyB64),
+    /** Расшифровать от собеседника (работает и для своих сообщений: ключ пары симметричен). */
+    boxOpen: (payload: { ciphertext: string; nonce: string }, theirPublicKeyB64: string, mySecretKeyB64: string) =>
+      boxOpen(sodium, payload, theirPublicKeyB64, mySecretKeyB64),
     computeFingerprint: (identityPublicKeyB64: string) => computeFingerprint(sodium, identityPublicKeyB64),
   };
 }
