@@ -6,6 +6,7 @@
     "@family-messenger/crypto": "file:../packages/crypto",
     "expo": "~57.0.9",
     "expo-camera": "~57.0.3",
+    "expo-dev-client": "~57.0.10",
     "expo-secure-store": "~57.0.1",
     "expo-sqlite": "~57.0.1",
     "expo-status-bar": "~57.0.1",
