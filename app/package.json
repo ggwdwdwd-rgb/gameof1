@@ -25,11 +25,10 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "build-crypto-dep": "npm run build --prefix ../packages/crypto",
-    "start": "npm run build-crypto-dep && expo start",
-    "android": "npm run build-crypto-dep && expo start --android",
-    "ios": "npm run build-crypto-dep && expo start --ios",
-    "web": "npm run build-crypto-dep && expo start --web"
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
   },
   "private": true
 }

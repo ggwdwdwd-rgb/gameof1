@@ -1,5 +1,5 @@
-import type { SodiumLike } from "./sodium.js";
-import type { Base64 } from "./types.js";
+import type { SodiumLike } from "./sodium";
+import type { Base64 } from "./types";
 
 /**
  * Человекочитаемый отпечаток identity-ключа для сверки вслух на экране «Семья»

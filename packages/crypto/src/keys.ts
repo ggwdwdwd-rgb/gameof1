@@ -1,5 +1,5 @@
-import type { SodiumLike } from "./sodium.js";
-import type { KeyPair } from "./types.js";
+import type { SodiumLike } from "./sodium";
+import type { KeyPair } from "./types";
 
 /** Identity-ключ устройства: Ed25519, для подписи auth-челленджа и fingerprint. */
 export function generateIdentityKeyPair(sodium: SodiumLike): KeyPair {

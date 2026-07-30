@@ -1,11 +1,13 @@
-import { deriveSharedKey, decryptWithKey, encryptWithKey, generateGroupKey } from "./channel.js";
-import { computeFingerprint } from "./fingerprint.js";
-import { generateEncryptionKeyPair, generateIdentityKeyPair } from "./keys.js";
-import type { SodiumLike } from "./sodium.js";
-import { signDetached, verifyDetached } from "./signing.js";
+// Импорты без .js-расширений: пакет резолвится Metro напрямую из исходников
+// (см. package.json), а Metro, в отличие от tsc, не подменяет .js на .ts.
+import { deriveSharedKey, decryptWithKey, encryptWithKey, generateGroupKey } from "./channel";
+import { computeFingerprint } from "./fingerprint";
+import { generateEncryptionKeyPair, generateIdentityKeyPair } from "./keys";
+import type { SodiumLike } from "./sodium";
+import { signDetached, verifyDetached } from "./signing";
 
-export type { Base64, EncryptedPayload, KeyPair } from "./types.js";
-export type { SodiumLike } from "./sodium.js";
+export type { Base64, EncryptedPayload, KeyPair } from "./types";
+export type { SodiumLike } from "./sodium";
 
 /**
  * Фабрика вместо синглтона: вызывающий код (сервер — libsodium-wrappers,

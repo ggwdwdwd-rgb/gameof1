@@ -38,8 +38,18 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
+          # Без set +e шаг падает раньше, чем мы успеваем показать JSON с
+          # причиной отказа, и в логе GitHub остаётся только "Build failed".
+          set +e
           npx eas-cli@latest build --platform android --profile preview --non-interactive --wait --json > ../eas-build-result.json
-          cat ../eas-build-result.json
+          code=$?
+          echo "--- eas-build-result.json ---"
+          cat ../eas-build-result.json || true
+          if [ "$code" -ne 0 ]; then
+            echo "--- причина отказа последней сборки на стороне EAS ---"
+            npx eas-cli@latest build:list --limit 1 --json --non-interactive || true
+          fi
+          exit "$code"
 
       - name: Скачать APK
         run: |

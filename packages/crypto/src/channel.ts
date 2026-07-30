@@ -1,5 +1,5 @@
-import type { SodiumLike } from "./sodium.js";
-import type { Base64, EncryptedPayload } from "./types.js";
+import type { SodiumLike } from "./sodium";
+import type { Base64, EncryptedPayload } from "./types";
 
 /**
  * Общий секрет для пары устройств (X25519 ECDH), см. ARCHITECTURE.md §2.2.

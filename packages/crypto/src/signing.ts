@@ -1,5 +1,5 @@
-import type { SodiumLike } from "./sodium.js";
-import type { Base64 } from "./types.js";
+import type { SodiumLike } from "./sodium";
+import type { Base64 } from "./types";
 
 /** Подписывает произвольный байт-массив (в т.ч. auth-nonce от сервера) identity-приватным ключом. */
 export function signDetached(sodium: SodiumLike, messageB64: Base64, secretKeyB64: Base64): Base64 {

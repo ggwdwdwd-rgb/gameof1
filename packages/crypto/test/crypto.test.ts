@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { createCrypto } from "../src/index.js";
-import type { SodiumLike } from "../src/sodium.js";
-import { getTestSodium } from "./testSodium.js";
+import { createCrypto } from "../src/index";
+import type { SodiumLike } from "../src/sodium";
+import { getTestSodium } from "./testSodium";
 
 let sodium: Awaited<ReturnType<typeof getTestSodium>>;
 let crypto: ReturnType<typeof createCrypto>;

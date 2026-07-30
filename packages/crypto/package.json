@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "//": "Указываем на TS-исходники, а не на dist/: dist в .gitignore, поэтому на сборщике EAS его нет — Metro компилирует TS сам, отдельный build-шаг для клиента не нужен.",
+  "main": "src/index.ts",
+  "react-native": "src/index.ts",
+  "types": "src/index.ts",
   "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run"
   },
