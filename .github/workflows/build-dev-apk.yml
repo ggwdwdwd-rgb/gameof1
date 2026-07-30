@@ -27,6 +27,12 @@ jobs:
           cd app
           npm install
 
+      - name: Привязать/создать EAS-проект (нужно перед non-interactive build)
+        working-directory: app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx eas-cli@latest init --non-interactive
+
       - name: Запустить EAS Build (development, Android)
         working-directory: app
         env:
