@@ -254,3 +254,41 @@ describe("golden-векторы (защита от регрессий в обв�
     expect(fp).toBe("E680 8F33 FBEC 8797 5122 804A C9CE DA8E");
   });
 });
+
+/**
+ * Сервер хранит шифротекст блобом, и при выдаче истории раньше кодировал его
+ * обычным base64 — а libsodium по умолчанию читает URLSAFE_NO_PADDING и падал
+ * на символах «+», «/», «=». Из-за этого сообщения из history.fetch не
+ * расшифровывались. Клиент обязан принимать оба варианта.
+ */
+describe("совместимость вариантов base64 (история с сервера)", () => {
+  /** Перекодирование urlsafe-no-padding → обычный base64 с «=», как делал сервер. */
+  function toStandardBase64(urlsafe: string): string {
+    const standard = urlsafe.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = (4 - (standard.length % 4)) % 4;
+    return standard + "=".repeat(padding);
+  }
+
+  it("расшифровывает сообщение, пришедшее в обычном base64 с «=»", () => {
+    const alice = crypto.generateEncryptionKeyPair();
+    const bob = crypto.generateEncryptionKeyPair();
+    // 82 байта шифротекста → в обычном base64 обязательно появится «==».
+    const text = "Привет! Проверка сквозного шифрования 🔐";
+
+    const payload = crypto.boxEncrypt(text, bob.publicKey, alice.secretKey);
+    const asServerSent = {
+      ciphertext: toStandardBase64(payload.ciphertext),
+      nonce: toStandardBase64(payload.nonce),
+    };
+    expect(asServerSent.ciphertext).not.toBe(payload.ciphertext);
+
+    expect(crypto.boxOpen(asServerSent, alice.publicKey, bob.secretKey)).toBe(text);
+  });
+
+  it("принимает публичный ключ в обычном base64 при вычислении отпечатка", () => {
+    const identity = crypto.generateIdentityKeyPair();
+    expect(crypto.computeFingerprint(toStandardBase64(identity.publicKey))).toBe(
+      crypto.computeFingerprint(identity.publicKey),
+    );
+  });
+});

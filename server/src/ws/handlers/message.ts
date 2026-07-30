@@ -38,8 +38,11 @@ function rowToDeliverable(row: MessageRow): DeliverableMessage {
     fromUserId: row.from_user_id,
     fromDeviceId: row.from_device_id,
     contentType: row.content_type,
-    ciphertext: row.ciphertext.toString("base64"),
-    nonce: row.nonce.toString("base64"),
+    // Именно base64url (без «=»): libsodium на клиенте по умолчанию читает
+    // вариант URLSAFE_NO_PADDING и на обычном base64 бросает исключение —
+    // из-за этого сообщения из history.fetch не расшифровывались.
+    ciphertext: row.ciphertext.toString("base64url"),
+    nonce: row.nonce.toString("base64url"),
     replyTo: row.reply_to,
     ts: row.created_at,
     ttlExpiresAt: row.ttl_expires_at,

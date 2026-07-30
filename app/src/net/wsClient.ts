@@ -72,6 +72,7 @@ export class WsClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closedByUser = false;
   private lastTypingSentAt = 0;
+  private lastPongAt = 0;
 
   constructor(
     private readonly serverUrl: string,
@@ -205,6 +206,7 @@ export class WsClient {
         this.events.emit("historyPage", parsed.payload as HistoryPagePayload);
         return;
       case "pong":
+        this.lastPongAt = Date.now();
         return;
       case "error":
         this.events.emit("errorPacket", parsed.payload as ErrorPayload);
@@ -240,6 +242,58 @@ export class WsClient {
   /** true, если соединение реально открыто и в него можно писать. */
   isOpen(): boolean {
     return this.ws !== null && this.ws.readyState === this.ws.OPEN;
+  }
+
+  /** true, когда соединение открыто И устройство уже аутентифицировано. */
+  isReady(): boolean {
+    return this.state === "connected" && this.isOpen();
+  }
+
+  /**
+   * Немедленное переподключение без ожидания экспоненциальной задержки —
+   * вызывается при возврате в приложение и вручную из UI. Android часто
+   * «убивает» сокет в фоне, и без этого приложение оставалось офлайн до
+   * перезапуска.
+   */
+  forceReconnect(): void {
+    if (this.closedByUser) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopPing();
+    this.reconnectAttempt = 0;
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.onmessage = null;
+      try {
+        this.ws.close();
+      } catch {
+        // сокет мог быть уже мёртв — неважно, всё равно создаём новый
+      }
+      this.ws = null;
+    }
+    this.connect();
+  }
+
+  /** Ждём готовности соединения (с попыткой переподключиться), максимум timeoutMs. */
+  waitUntilReady(timeoutMs: number): Promise<boolean> {
+    if (this.isReady()) return Promise.resolve(true);
+    if (!this.isOpen()) this.forceReconnect();
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        unsubscribe();
+        resolve(false);
+      }, timeoutMs);
+      const unsubscribe = this.events.on("state", (state) => {
+        if (state === "connected") {
+          clearTimeout(timer);
+          unsubscribe();
+          resolve(true);
+        }
+      });
+    });
   }
 
   /**
@@ -290,7 +344,16 @@ export class WsClient {
 
   private startPing(): void {
     this.stopPing();
+    this.lastPongAt = Date.now();
     this.pingTimer = setInterval(() => {
+      // Сокет может «умереть» без события close (обычное дело на мобильной
+      // сети): readyState всё ещё OPEN, но данные не ходят. Если на два
+      // пинга подряд не пришло pong — считаем соединение мёртвым и
+      // переподключаемся, иначе приложение висело бы «на связи» вечно.
+      if (Date.now() - this.lastPongAt > PING_INTERVAL_MS * 2 + 5_000) {
+        this.forceReconnect();
+        return;
+      }
       if (this.ws && this.ws.readyState === this.ws.OPEN) this.rawSend(this.ws, "ping", {});
     }, PING_INTERVAL_MS);
   }

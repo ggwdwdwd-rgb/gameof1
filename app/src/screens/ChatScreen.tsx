@@ -30,6 +30,7 @@ import { useTheme } from "../theme/ThemeContext";
 import type { Theme } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
 import { Header } from "../ui/Header";
+import { useKeyboardVisible } from "../ui/useKeyboardVisible";
 import { uuidv4 } from "../util/uuid";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -150,6 +151,7 @@ export function ChatScreen({
     useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const keyboardVisible = useKeyboardVisible();
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
@@ -195,6 +197,12 @@ export function ChatScreen({
       offTyping();
     };
   }, [chatId, chatEvents, identity.userId, markRead]);
+
+  // Клавиатура уменьшает список, но не меняет размер его содержимого, поэтому
+  // onContentSizeChange не срабатывает — доскроллим до последнего сообщения сами.
+  useEffect(() => {
+    if (keyboardVisible) listRef.current?.scrollToEnd({ animated: true });
+  }, [keyboardVisible]);
 
   // Уходя с экрана, обязательно снимаем свой индикатор "печатает".
   useEffect(
@@ -430,7 +438,9 @@ export function ChatScreen({
           styles.inputRow,
           {
             // Нижние кнопки навигации перекрывали строку ввода — добавляем инсет.
-            paddingBottom: 9 + insets.bottom,
+            // Под открытой клавиатурой инсет не нужен: её высота уже включает
+            // область навигации, иначе снизу оставалась бы пустая полоса.
+            paddingBottom: 9 + (keyboardVisible ? 0 : insets.bottom),
             backgroundColor: theme.colors.surface,
             borderTopColor: theme.colors.border,
           },

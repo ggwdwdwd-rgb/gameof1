@@ -1,3 +1,4 @@
+import { decodeBase64 } from "./base64";
 import type { SodiumLike } from "./sodium";
 import type { Base64, EncryptedPayload } from "./types";
 
@@ -20,8 +21,8 @@ export function boxEncrypt(
   const ciphertext = sodium.crypto_box_easy(
     sodium.from_string(plaintext),
     nonce,
-    sodium.from_base64(theirPublicKeyB64),
-    sodium.from_base64(mySecretKeyB64),
+    decodeBase64(sodium, theirPublicKeyB64),
+    decodeBase64(sodium, mySecretKeyB64),
   );
   return { ciphertext: sodium.to_base64(ciphertext), nonce: sodium.to_base64(nonce) };
 }
@@ -34,10 +35,10 @@ export function boxOpen(
   mySecretKeyB64: Base64,
 ): string {
   const plaintext = sodium.crypto_box_open_easy(
-    sodium.from_base64(payload.ciphertext),
-    sodium.from_base64(payload.nonce),
-    sodium.from_base64(theirPublicKeyB64),
-    sodium.from_base64(mySecretKeyB64),
+    decodeBase64(sodium, payload.ciphertext),
+    decodeBase64(sodium, payload.nonce),
+    decodeBase64(sodium, theirPublicKeyB64),
+    decodeBase64(sodium, mySecretKeyB64),
   );
   return sodium.to_string(plaintext);
 }

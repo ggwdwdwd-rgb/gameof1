@@ -1,9 +1,10 @@
+import { decodeBase64 } from "./base64";
 import type { SodiumLike } from "./sodium";
 import type { Base64 } from "./types";
 
 /** Подписывает произвольный байт-массив (в т.ч. auth-nonce от сервера) identity-приватным ключом. */
 export function signDetached(sodium: SodiumLike, messageB64: Base64, secretKeyB64: Base64): Base64 {
-  const signature = sodium.crypto_sign_detached(sodium.from_base64(messageB64), sodium.from_base64(secretKeyB64));
+  const signature = sodium.crypto_sign_detached(decodeBase64(sodium, messageB64), decodeBase64(sodium, secretKeyB64));
   return sodium.to_base64(signature);
 }
 
@@ -15,9 +16,9 @@ export function verifyDetached(
 ): boolean {
   try {
     return sodium.crypto_sign_verify_detached(
-      sodium.from_base64(signatureB64),
-      sodium.from_base64(messageB64),
-      sodium.from_base64(publicKeyB64),
+      decodeBase64(sodium, signatureB64),
+      decodeBase64(sodium, messageB64),
+      decodeBase64(sodium, publicKeyB64),
     );
   } catch {
     // некорректный base64/длина ключа — считаем подпись невалидной, не бросаем исключение

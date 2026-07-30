@@ -8,7 +8,9 @@ import { useTheme } from "../theme/ThemeContext";
 import { Header } from "../ui/Header";
 
 const INVITE_ERRORS: Record<"OFFLINE" | "TIMEOUT" | "SERVER_OUTDATED", string> = {
-  OFFLINE: "Нет соединения с сервером — код можно создать только онлайн.",
+  OFFLINE:
+    "Не удалось подключиться к серверу — код выдаёт он, поэтому нужен интернет. " +
+    "Проверьте связь и нажмите «Попробовать снова».",
   TIMEOUT: "Сервер не ответил вовремя. Попробуйте ещё раз.",
   SERVER_OUTDATED:
     "Сервер работает на старой версии и не умеет выпускать коды. Обновите его на VPS:\n\n" +
@@ -64,7 +66,12 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
       <Header title="Добавить человека" onBack={onBack} />
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
-        {loading && <ActivityIndicator color={theme.colors.accent} style={styles.loader} />}
+        {loading && (
+          <View style={styles.loader}>
+            <ActivityIndicator color={theme.colors.accent} />
+            <Text style={[styles.loaderText, { color: theme.colors.textSecondary }]}>Запрашиваем код у сервера…</Text>
+          </View>
+        )}
 
         {error && (
           <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
@@ -133,7 +140,8 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
 const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { padding: 16, gap: 12 },
-  loader: { marginTop: 24 },
+  loader: { marginTop: 24, alignItems: "center", gap: 10 },
+  loaderText: { fontSize: 13 },
   card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, padding: 16 },
   qrCard: { alignItems: "center", gap: 12 },
   qrBox: { backgroundColor: "#fff", padding: 12, borderRadius: 12 },

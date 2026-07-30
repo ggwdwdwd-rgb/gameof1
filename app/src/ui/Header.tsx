@@ -9,12 +9,14 @@ export function Header({
   onBack,
   right,
   left,
+  onPressSubtitle,
 }: {
   title: string;
   subtitle?: string | undefined;
   onBack?: (() => void) | undefined;
   right?: React.ReactNode;
   left?: React.ReactNode;
+  onPressSubtitle?: (() => void) | undefined;
 }): React.ReactElement {
   const theme = useTheme();
   // Отступ сверху берём из системных инсетов, а не фиксированным числом:
@@ -46,9 +48,11 @@ export function Header({
           {title}
         </Text>
         {subtitle ? (
-          <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]} numberOfLines={1}>
-            {subtitle}
-          </Text>
+          <Pressable onPress={onPressSubtitle} disabled={!onPressSubtitle} hitSlop={10}>
+            <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]} numberOfLines={1}>
+              {subtitle}
+            </Text>
+          </Pressable>
         ) : null}
       </View>
 

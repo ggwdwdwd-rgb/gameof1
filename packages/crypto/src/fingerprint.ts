@@ -1,3 +1,4 @@
+import { decodeBase64 } from "./base64";
 import type { SodiumLike } from "./sodium";
 import type { Base64 } from "./types";
 
@@ -8,7 +9,7 @@ import type { Base64 } from "./types";
  * продиктовать по телефону, чем весь base64-ключ.
  */
 export function computeFingerprint(sodium: SodiumLike, identityPublicKeyB64: Base64): string {
-  const hash = sodium.crypto_generichash(16, sodium.from_base64(identityPublicKeyB64));
+  const hash = sodium.crypto_generichash(16, decodeBase64(sodium, identityPublicKeyB64));
   const hex = Array.from(hash)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");

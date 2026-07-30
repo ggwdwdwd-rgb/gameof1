@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { AppState } from "react-native";
 import { createCrypto } from "@family-messenger/crypto";
 import { getCrypto } from "../crypto/sodium";
 import { listContacts, upsertContact, type Contact } from "../db/contacts";
@@ -26,6 +27,9 @@ const MEDIA_CONTENT_TYPES = new Set(["image", "voice", "file"]);
 
 /** Собеседник считается печатающим не дольше этого времени — страховка от «зависшего» индикатора. */
 const TYPING_EXPIRY_MS = 6_000;
+
+/** Сколько ждём готовности соединения там, где без сервера операция невозможна (создание инвайта). */
+const WAIT_READY_MS = 10_000;
 
 interface ChatEvents extends Record<string, (...args: never[]) => void> {
   messageInserted: (chatId: string) => void;
@@ -59,6 +63,7 @@ interface AppContextValue {
   setTyping: (chatId: string, isTyping: boolean) => void;
   loadMessages: (chatId: string) => Promise<LocalMessage[]>;
   createInvite: () => Promise<CreateInviteResult>;
+  reconnect: () => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -204,8 +209,18 @@ export function AppProvider({
       ws.connect();
     })();
 
+    // Android рвёт сокеты у свёрнутых приложений, событие close при этом может
+    // не прийти. Поэтому при каждом возврате в приложение проверяем связь и,
+    // если её нет, переподключаемся сразу, не дожидаясь backoff-таймера.
+    const appStateSub = AppState.addEventListener("change", (nextState) => {
+      if (nextState !== "active") return;
+      const ws = wsRef.current;
+      if (ws && !ws.isReady()) ws.forceReconnect();
+    });
+
     return () => {
       cancelled = true;
+      appStateSub.remove();
       for (const timer of typingTimers.values()) clearTimeout(timer);
       wsRef.current?.disconnect();
     };
@@ -254,6 +269,10 @@ export function AppProvider({
         nonce: encrypted.nonce,
         replyTo,
       });
+
+      // Сообщение уже в outbox и уйдёт при подключении, но ждать до 30 секунд
+      // backoff незачем: если связи нет — пробуем подключиться немедленно.
+      if (!ws.isReady()) ws.forceReconnect();
       return { ok: true };
     }
 
@@ -282,9 +301,17 @@ export function AppProvider({
         wsRef.current?.sendTyping(chatId, isTyping);
       },
       loadMessages: (chatId) => listMessagesForChat(chatId),
-      createInvite() {
+      reconnect() {
+        wsRef.current?.forceReconnect();
+      },
+      async createInvite() {
         const ws = wsRef.current;
-        if (!ws || !ws.isOpen()) return Promise.resolve<CreateInviteResult>({ ok: false, reason: "OFFLINE" });
+        if (!ws) return { ok: false, reason: "OFFLINE" };
+
+        // Раньше здесь была мгновенная проверка isOpen(): если сокет умер в
+        // фоне (обычное дело на Android), экран сразу писал «нет соединения».
+        // Теперь сначала пробуем переподключиться и подождать авторизацию.
+        if (!(await ws.waitUntilReady(WAIT_READY_MS))) return { ok: false, reason: "OFFLINE" };
 
         return new Promise<CreateInviteResult>((resolve) => {
           let settled = false;

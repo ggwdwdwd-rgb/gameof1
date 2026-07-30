@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.json && mkdir -p dist/db/migrations && cp src/db/migrations/*.sql dist/db/migrations/",
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",
-    "invite:create": "tsx src/cli/create-invite.ts"
+    "invite:create": "tsx src/cli/create-invite.ts",
+    "test:e2e": "tsx test/e2e.mjs"
   },
   "dependencies": {
     "@fastify/websocket": "^11.0.2",

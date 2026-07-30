@@ -58,7 +58,7 @@ export function ChatListScreen({
   onOpenSettings: () => void;
   onAddPerson: () => void;
 }): React.ReactElement {
-  const { identity, connectionState, contacts, chatEvents } = useApp();
+  const { identity, connectionState, contacts, chatEvents, reconnect } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<ChatRow[]>([]);
@@ -92,7 +92,13 @@ export function ChatListScreen({
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <Header
         title="Cry"
-        subtitle={STATE_LABELS[connectionState] ?? connectionState}
+        subtitle={
+          connectionState === "connected"
+            ? STATE_LABELS.connected
+            : `${STATE_LABELS[connectionState] ?? connectionState} · нажмите, чтобы повторить`
+        }
+        // Ручное переподключение: быстрее, чем ждать backoff или перезапускать приложение.
+        onPressSubtitle={connectionState === "connected" ? undefined : reconnect}
         left={<View />}
         right={
           <Pressable onPress={onOpenSettings} hitSlop={12} style={styles.headerButton}>
