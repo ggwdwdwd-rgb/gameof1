@@ -10,6 +10,7 @@ import {
 import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
+  FlatList,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -19,77 +20,91 @@ import {
   Text,
   TextInput,
   View,
-  FlatList,
 } from "react-native";
-import { isGroupChat } from "../chat/chatId";
 import { buildEnvelopeFromLocalFile, formatFileSize, parseLocalMediaMeta, persistLocalFile } from "../chat/media";
 import { getCurrentLocationOnce, pickAndCompressImage, pickFile } from "../chat/pickers";
-import { useApp } from "../context/AppContext";
+import { useApp, type SendResult } from "../context/AppContext";
 import { listMessagesForChat, type LocalMessage } from "../db/messages";
+import { useTheme } from "../theme/ThemeContext";
+import type { Theme } from "../theme/theme";
+import { Avatar } from "../ui/Avatar";
+import { Header } from "../ui/Header";
 import { uuidv4 } from "../util/uuid";
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: "…",
+  pending: "○",
   sent: "✓",
   delivered: "✓✓",
   read: "✓✓",
   failed: "!",
 };
 
-function VoiceBubble({ localUri, durationMs }: { localUri: string; durationMs?: number }): React.ReactElement {
+function formatTime(ts: number): string {
+  const date = new Date(ts);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function VoiceBubble({
+  localUri,
+  durationMs,
+  tint,
+}: {
+  localUri: string;
+  durationMs?: number | undefined;
+  tint: string;
+}): React.ReactElement {
   const player = useAudioPlayer(localUri);
   const status = useAudioPlayerStatus(player);
-  const totalSec = Math.round((status.duration || (durationMs ?? 0) / 1000) || 0);
+  const totalSec = Math.round(status.duration || (durationMs ?? 0) / 1000 || 0);
   const currentSec = Math.round(status.currentTime || 0);
 
   return (
-    <Pressable
-      style={voiceStyles.row}
-      onPress={() => (status.playing ? player.pause() : player.play())}
-    >
-      <Text style={voiceStyles.icon}>{status.playing ? "⏸" : "▶︎"}</Text>
-      <Text style={voiceStyles.time}>
-        {currentSec > 0 ? `${currentSec}s / ` : ""}
-        {totalSec}s
+    <Pressable style={styles.voiceRow} onPress={() => (status.playing ? player.pause() : player.play())}>
+      <Text style={[styles.voiceIcon, { color: tint }]}>{status.playing ? "❚❚" : "▶"}</Text>
+      <Text style={[styles.voiceTime, { color: tint }]}>
+        {currentSec > 0 ? `${currentSec} / ` : ""}
+        {totalSec} с
       </Text>
     </Pressable>
   );
 }
 
-const voiceStyles = StyleSheet.create({
-  row: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
-  icon: { fontSize: 18 },
-  time: { fontSize: 14, color: "#444" },
-});
-
-function MessageContent({ item }: { item: LocalMessage }): React.ReactElement {
+function MessageContent({
+  item,
+  textColor,
+  theme,
+}: {
+  item: LocalMessage;
+  textColor: string;
+  theme: Theme;
+}): React.ReactElement {
   if (item.deletedAt) {
-    return <Text style={styles.deletedText}>Сообщение удалено</Text>;
+    return <Text style={[styles.deletedText, { color: theme.colors.textMuted }]}>Сообщение удалено</Text>;
   }
 
   if (item.contentType === "image") {
     const meta = parseLocalMediaMeta(item.plaintext);
-    if (!meta) return <Text style={styles.bubbleText}>[не удалось загрузить фото]</Text>;
+    if (!meta) return <Text style={[styles.bubbleText, { color: textColor }]}>Фото недоступно</Text>;
     return <Image source={{ uri: meta.localUri }} style={styles.image} resizeMode="cover" />;
   }
 
   if (item.contentType === "voice") {
     const meta = parseLocalMediaMeta(item.plaintext);
-    if (!meta) return <Text style={styles.bubbleText}>[не удалось загрузить голосовое]</Text>;
-    return <VoiceBubble localUri={meta.localUri} durationMs={meta.durationMs} />;
+    if (!meta) return <Text style={[styles.bubbleText, { color: textColor }]}>Голосовое недоступно</Text>;
+    return <VoiceBubble localUri={meta.localUri} durationMs={meta.durationMs} tint={textColor} />;
   }
 
   if (item.contentType === "file") {
     const meta = parseLocalMediaMeta(item.plaintext);
-    if (!meta) return <Text style={styles.bubbleText}>[не удалось загрузить файл]</Text>;
+    if (!meta) return <Text style={[styles.bubbleText, { color: textColor }]}>Файл недоступен</Text>;
     return (
       <View style={styles.fileRow}>
-        <Text style={styles.fileIcon}>📎</Text>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.fileName} numberOfLines={1}>
+        <Text style={[styles.fileIcon, { color: textColor }]}>📄</Text>
+        <View style={styles.fileInfo}>
+          <Text style={[styles.fileName, { color: textColor }]} numberOfLines={1}>
             {meta.fileName ?? "файл"}
           </Text>
-          <Text style={styles.fileSize}>{formatFileSize(meta.sizeBytes)}</Text>
+          <Text style={[styles.fileSize, { color: textColor, opacity: 0.7 }]}>{formatFileSize(meta.sizeBytes)}</Text>
         </View>
       </View>
     );
@@ -98,42 +113,54 @@ function MessageContent({ item }: { item: LocalMessage }): React.ReactElement {
   if (item.contentType === "location") {
     try {
       const { lat, lng } = JSON.parse(item.plaintext ?? "{}") as { lat: number; lng: number };
+      if (typeof lat !== "number" || typeof lng !== "number") throw new Error("bad payload");
       return (
         <Pressable onPress={() => void Linking.openURL(`https://maps.google.com/?q=${lat},${lng}`)}>
-          <Text style={styles.bubbleText}>📍 Геолокация</Text>
-          <Text style={styles.locationCoords}>
-            {lat.toFixed(5)}, {lng.toFixed(5)} — открыть на карте
+          <Text style={[styles.bubbleText, { color: textColor }]}>📍 Я тут</Text>
+          <Text style={[styles.locationCoords, { color: textColor, opacity: 0.75 }]}>
+            {lat.toFixed(5)}, {lng.toFixed(5)} — открыть карту
           </Text>
         </Pressable>
       );
     } catch {
-      return <Text style={styles.bubbleText}>[геолокация]</Text>;
+      return <Text style={[styles.bubbleText, { color: textColor }]}>Геолокация недоступна</Text>;
     }
   }
 
-  return <Text style={styles.bubbleText}>{item.plaintext ?? "[не удалось расшифровать]"}</Text>;
+  return (
+    <Text style={[styles.bubbleText, { color: textColor }]}>
+      {item.plaintext ?? "Не удалось расшифровать сообщение"}
+    </Text>
+  );
 }
 
 export function ChatScreen({
   chatId,
   title,
+  peerUserId,
   onBack,
 }: {
   chatId: string;
   title: string;
+  peerUserId: string;
   onBack: () => void;
 }): React.ReactElement {
-  const { identity, contacts, chatEvents, sendText, sendMedia, sendLocation, deleteMessage, markRead, setTyping } = useApp();
+  const { identity, contacts, chatEvents, sendText, sendMedia, sendLocation, deleteMessage, markRead, setTyping } =
+    useApp();
+  const theme = useTheme();
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
+  const [attachOpen, setAttachOpen] = useState(false);
   const listRef = useRef<FlatList<LocalMessage>>(null);
   const typingStopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesByIdRef = useRef<Map<string, LocalMessage>>(new Map());
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
+
+  const contact = contacts.find((c) => c.userId === peerUserId);
 
   useEffect(() => {
     let mounted = true;
@@ -151,24 +178,44 @@ export function ChatScreen({
     }
 
     void refresh();
-    const unsubscribe = chatEvents.on("messageInserted", (insertedChatId) => {
+    const offInserted = chatEvents.on("messageInserted", (insertedChatId) => {
       if (insertedChatId === chatId) void refresh();
     });
-    const unsubscribeStatus = chatEvents.on("messageStatusChanged", () => void refresh());
-    const unsubscribeTyping = chatEvents.on("typingChanged", (typingChatId, _fromUserId, isTyping) => {
+    const offStatus = chatEvents.on("messageStatusChanged", () => void refresh());
+    const offTyping = chatEvents.on("typingChanged", (typingChatId, _fromUserId, isTyping) => {
       if (typingChatId === chatId) setPeerTyping(isTyping);
     });
+
     return () => {
       mounted = false;
-      unsubscribe();
-      unsubscribeStatus();
-      unsubscribeTyping();
+      offInserted();
+      offStatus();
+      offTyping();
     };
   }, [chatId, chatEvents, identity.userId, markRead]);
+
+  // Уходя с экрана, обязательно снимаем свой индикатор "печатает".
+  useEffect(
+    () => () => {
+      if (typingStopTimer.current) clearTimeout(typingStopTimer.current);
+      setTyping(chatId, false);
+    },
+    [chatId, setTyping],
+  );
 
   function displayNameFor(userId: string): string {
     if (userId === identity.userId) return "Вы";
     return contacts.find((c) => c.userId === userId)?.displayName ?? "…";
+  }
+
+  function reportIfFailed(result: SendResult): void {
+    if (result.ok) return;
+    Alert.alert(
+      "Сообщение не отправлено",
+      result.reason === "NO_CONTACT"
+        ? "Данные собеседника ещё не получены с сервера. Дождитесь подключения и попробуйте снова."
+        : "Приложение ещё инициализируется. Попробуйте через секунду.",
+    );
   }
 
   function handleDraftChange(value: string): void {
@@ -178,14 +225,18 @@ export function ChatScreen({
     typingStopTimer.current = setTimeout(() => setTyping(chatId, false), 3000);
   }
 
+  function takeReplyTo(): string | null {
+    const replyTo = replyingTo?.id ?? null;
+    setReplyingTo(null);
+    return replyTo;
+  }
+
   async function handleSend(): Promise<void> {
     const text = draft.trim();
     if (!text) return;
     setDraft("");
-    const replyTo = replyingTo?.id ?? null;
-    setReplyingTo(null);
     setTyping(chatId, false);
-    await sendText(chatId, text, replyTo);
+    reportIfFailed(await sendText(chatId, text, takeReplyTo()));
   }
 
   function handleLongPress(item: LocalMessage): void {
@@ -194,41 +245,42 @@ export function ChatScreen({
       { text: "Ответить", onPress: () => setReplyingTo(item) },
     ];
     if (item.fromUserId === identity.userId) {
-      buttons.push({ text: "Удалить у всех", style: "destructive", onPress: () => void deleteMessage(item.id, chatId) });
+      buttons.push({
+        text: "Удалить у всех",
+        style: "destructive",
+        onPress: () => void deleteMessage(item.id, chatId),
+      });
     }
     buttons.push({ text: "Отмена", style: "cancel" });
     Alert.alert("Сообщение", undefined, buttons);
   }
 
   async function handlePickImage(): Promise<void> {
+    setAttachOpen(false);
     const prepared = await pickAndCompressImage();
     if (!prepared) return;
-    const replyTo = replyingTo?.id ?? null;
-    setReplyingTo(null);
-    await sendMedia(chatId, "image", prepared.envelopeJson, prepared.localMeta, replyTo);
+    reportIfFailed(await sendMedia(chatId, "image", prepared.envelopeJson, prepared.localMeta, takeReplyTo()));
   }
 
   async function handlePickFile(): Promise<void> {
+    setAttachOpen(false);
     const prepared = await pickFile();
     if (!prepared) return;
     if ("error" in prepared) {
       Alert.alert("Файл слишком большой", "Максимальный размер файла — 25 МБ.");
       return;
     }
-    const replyTo = replyingTo?.id ?? null;
-    setReplyingTo(null);
-    await sendMedia(chatId, "file", prepared.envelopeJson, prepared.localMeta, replyTo);
+    reportIfFailed(await sendMedia(chatId, "file", prepared.envelopeJson, prepared.localMeta, takeReplyTo()));
   }
 
   async function handleShareLocation(): Promise<void> {
+    setAttachOpen(false);
     const location = await getCurrentLocationOnce();
     if (!location) {
       Alert.alert("Нет доступа к геолокации", "Разрешите доступ в настройках устройства.");
       return;
     }
-    const replyTo = replyingTo?.id ?? null;
-    setReplyingTo(null);
-    await sendLocation(chatId, location.lat, location.lng, replyTo);
+    reportIfFailed(await sendLocation(chatId, location.lat, location.lng, takeReplyTo()));
   }
 
   async function handleStartRecording(): Promise<void> {
@@ -243,109 +295,169 @@ export function ChatScreen({
   }
 
   async function handleStopRecording(): Promise<void> {
+    if (!recorderState.isRecording) return;
     const durationMs = recorderState.durationMillis;
     await recorder.stop();
     const uri = recorder.uri;
     if (!uri) return;
     const localUri = persistLocalFile(uri, `${uuidv4()}.m4a`);
     const envelopeJson = buildEnvelopeFromLocalFile(localUri, { mimeType: "audio/m4a", durationMs });
-    const replyTo = replyingTo?.id ?? null;
-    setReplyingTo(null);
-    await sendMedia(chatId, "voice", envelopeJson, { localUri, mimeType: "audio/m4a", durationMs }, replyTo);
+    reportIfFailed(
+      await sendMedia(chatId, "voice", envelopeJson, { localUri, mimeType: "audio/m4a", durationMs }, takeReplyTo()),
+    );
   }
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={80}
     >
-      <View style={styles.header}>
-        <Pressable onPress={onBack} hitSlop={12}>
-          <Text style={styles.back}>‹</Text>
-        </Pressable>
-        <View>
-          <Text style={styles.headerTitle}>{title}</Text>
-          {peerTyping && <Text style={styles.typingLabel}>печатает…</Text>}
-        </View>
-        <View style={{ width: 24 }} />
-      </View>
+      <Header
+        title={title}
+        subtitle={peerTyping ? "печатает…" : undefined}
+        onBack={onBack}
+        right={<Avatar name={title} seed={peerUserId} size={34} />}
+      />
 
       <FlatList
         ref={listRef}
         data={messages}
         keyExtractor={(m) => m.id}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={messages.length === 0 ? styles.emptyContainer : styles.list}
         renderItem={({ item }) => {
           const mine = item.fromUserId === identity.userId;
+          const textColor = mine ? theme.colors.bubbleMineText : theme.colors.bubbleTheirsText;
           const repliedMessage = item.replyTo ? messagesByIdRef.current.get(item.replyTo) : undefined;
           return (
             <Pressable
-              style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}
+              style={[
+                styles.bubble,
+                mine ? styles.bubbleMine : styles.bubbleTheirs,
+                {
+                  backgroundColor: mine ? theme.colors.bubbleMine : theme.colors.bubbleTheirs,
+                  borderColor: theme.colors.border,
+                },
+              ]}
               onLongPress={() => handleLongPress(item)}
             >
-              {!mine && isGroupChat(chatId) && <Text style={styles.sender}>{displayNameFor(item.fromUserId)}</Text>}
               {repliedMessage && (
-                <View style={styles.replyQuote}>
-                  <Text style={styles.replyQuoteAuthor}>{displayNameFor(repliedMessage.fromUserId)}</Text>
-                  <Text style={styles.replyQuoteText} numberOfLines={1}>
-                    {repliedMessage.contentType === "text" ? (repliedMessage.plaintext ?? "") : "[вложение]"}
+                <View style={[styles.replyQuote, { borderLeftColor: textColor }]}>
+                  <Text style={[styles.replyQuoteAuthor, { color: textColor }]}>
+                    {displayNameFor(repliedMessage.fromUserId)}
+                  </Text>
+                  <Text style={[styles.replyQuoteText, { color: textColor, opacity: 0.8 }]} numberOfLines={1}>
+                    {repliedMessage.contentType === "text" ? (repliedMessage.plaintext ?? "") : "Вложение"}
                   </Text>
                 </View>
               )}
-              <MessageContent item={item} />
-              {mine && !item.deletedAt && <Text style={styles.status}>{STATUS_LABELS[item.status] ?? ""}</Text>}
+              <MessageContent item={item} textColor={textColor} theme={theme} />
+              <View style={styles.metaRow}>
+                <Text style={[styles.time, { color: textColor, opacity: 0.65 }]}>{formatTime(item.createdAt)}</Text>
+                {mine && !item.deletedAt && (
+                  <Text
+                    style={[
+                      styles.status,
+                      { color: item.status === "read" ? theme.colors.success : textColor, opacity: 0.8 },
+                    ]}
+                  >
+                    {STATUS_LABELS[item.status] ?? ""}
+                  </Text>
+                )}
+              </View>
             </Pressable>
           );
         }}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Avatar name={title} seed={peerUserId} size={72} />
+            <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}>{title}</Text>
+            {contact && (
+              <Text style={[styles.emptyFingerprint, { color: theme.colors.textMuted }]}>
+                Отпечаток ключа: {contact.fingerprint}
+              </Text>
+            )}
+            <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+              Сообщений пока нет. Всё, что вы отправите, шифруется на устройстве.
+            </Text>
+          </View>
+        }
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
       />
 
       {replyingTo && (
-        <View style={styles.replyBar}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.replyBarAuthor}>Ответ для {displayNameFor(replyingTo.fromUserId)}</Text>
-            <Text style={styles.replyBarText} numberOfLines={1}>
-              {replyingTo.contentType === "text" ? (replyingTo.plaintext ?? "") : "[вложение]"}
+        <View
+          style={[styles.replyBar, { backgroundColor: theme.colors.accentSoft, borderTopColor: theme.colors.border }]}
+        >
+          <View style={styles.replyBarText}>
+            <Text style={[styles.replyBarAuthor, { color: theme.colors.accent }]}>
+              Ответ {displayNameFor(replyingTo.fromUserId)}
+            </Text>
+            <Text style={[styles.replyBarPreview, { color: theme.colors.textSecondary }]} numberOfLines={1}>
+              {replyingTo.contentType === "text" ? (replyingTo.plaintext ?? "") : "Вложение"}
             </Text>
           </View>
-          <Pressable onPress={() => setReplyingTo(null)} hitSlop={8}>
-            <Text style={styles.replyBarClose}>✕</Text>
+          <Pressable onPress={() => setReplyingTo(null)} hitSlop={10}>
+            <Text style={[styles.replyBarClose, { color: theme.colors.textMuted }]}>✕</Text>
           </Pressable>
         </View>
       )}
 
-      <View style={styles.attachRow}>
-        <Pressable style={styles.attachButton} onPress={() => void handlePickImage()}>
-          <Text style={styles.attachIcon}>📷</Text>
-        </Pressable>
-        <Pressable style={styles.attachButton} onPress={() => void handlePickFile()}>
-          <Text style={styles.attachIcon}>📎</Text>
-        </Pressable>
-        <Pressable style={styles.attachButton} onPress={() => void handleShareLocation()}>
-          <Text style={styles.attachIcon}>📍</Text>
-        </Pressable>
-      </View>
+      {attachOpen && (
+        <View style={[styles.attachSheet, { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.border }]}>
+          {[
+            { icon: "🖼", label: "Фото", onPress: handlePickImage },
+            { icon: "📄", label: "Файл", onPress: handlePickFile },
+            { icon: "📍", label: "Я тут", onPress: handleShareLocation },
+          ].map((action) => (
+            <Pressable key={action.label} style={styles.attachAction} onPress={() => void action.onPress()}>
+              <View style={[styles.attachIconCircle, { backgroundColor: theme.colors.accentSoft }]}>
+                <Text style={styles.attachIcon}>{action.icon}</Text>
+              </View>
+              <Text style={[styles.attachLabel, { color: theme.colors.textSecondary }]}>{action.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
-      <View style={styles.inputRow}>
+      <View style={[styles.inputRow, { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.border }]}>
+        <Pressable onPress={() => setAttachOpen((open) => !open)} hitSlop={10} style={styles.plusButton}>
+          <Text style={[styles.plusIcon, { color: attachOpen ? theme.colors.accent : theme.colors.textSecondary }]}>
+            {attachOpen ? "✕" : "＋"}
+          </Text>
+        </Pressable>
         <TextInput
-          style={styles.input}
+          style={[
+            styles.input,
+            {
+              backgroundColor: theme.colors.background,
+              borderColor: theme.colors.border,
+              color: theme.colors.textPrimary,
+            },
+          ]}
           value={draft}
           onChangeText={handleDraftChange}
-          placeholder="Сообщение…"
+          placeholder={recorderState.isRecording ? "Записываю…" : "Сообщение"}
+          placeholderTextColor={theme.colors.textMuted}
           multiline
         />
         {draft.trim() ? (
-          <Pressable style={styles.sendButton} onPress={() => void handleSend()}>
-            <Text style={styles.sendButtonText}>→</Text>
+          <Pressable
+            style={[styles.sendButton, { backgroundColor: theme.colors.accent }]}
+            onPress={() => void handleSend()}
+          >
+            <Text style={[styles.sendIcon, { color: theme.colors.onAccent }]}>↑</Text>
           </Pressable>
         ) : (
           <Pressable
-            style={[styles.sendButton, recorderState.isRecording && styles.sendButtonRecording]}
+            style={[
+              styles.sendButton,
+              { backgroundColor: recorderState.isRecording ? theme.colors.danger : theme.colors.accent },
+            ]}
             onPressIn={() => void handleStartRecording()}
             onPressOut={() => void handleStopRecording()}
           >
-            <Text style={styles.sendButtonText}>🎤</Text>
+            <Text style={[styles.sendIcon, { color: theme.colors.onAccent }]}>🎤</Text>
           </Pressable>
         )}
       </View>
@@ -354,91 +466,75 @@ export function ChatScreen({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f4f4f4" },
-  header: {
-    paddingTop: 56,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-  },
-  back: { fontSize: 28, width: 24, color: "#2f6f4f" },
-  headerTitle: { fontSize: 18, fontWeight: "700" },
-  typingLabel: { fontSize: 12, color: "#2f6f4f" },
-  list: { padding: 12, gap: 6 },
-  bubble: { maxWidth: "80%", borderRadius: 12, padding: 10, marginVertical: 3 },
-  bubbleMine: { backgroundColor: "#dcf3e4", alignSelf: "flex-end" },
-  bubbleTheirs: { backgroundColor: "#fff", alignSelf: "flex-start" },
-  sender: { fontSize: 12, fontWeight: "700", color: "#2f6f4f", marginBottom: 2 },
-  bubbleText: { fontSize: 16 },
-  deletedText: { fontSize: 15, color: "#999", fontStyle: "italic" },
-  status: { fontSize: 11, color: "#888", textAlign: "right", marginTop: 2 },
-  image: { width: 220, height: 220, borderRadius: 8 },
-  fileRow: { flexDirection: "row", alignItems: "center", gap: 8, maxWidth: 220 },
-  fileIcon: { fontSize: 24 },
-  fileName: { fontSize: 15, fontWeight: "600" },
-  fileSize: { fontSize: 12, color: "#777" },
-  locationCoords: { fontSize: 12, color: "#2f6f4f", marginTop: 2 },
-  replyQuote: {
-    borderLeftWidth: 3,
-    borderLeftColor: "#2f6f4f",
-    paddingLeft: 8,
-    marginBottom: 6,
-  },
-  replyQuoteAuthor: { fontSize: 12, fontWeight: "700", color: "#2f6f4f" },
-  replyQuoteText: { fontSize: 13, color: "#555" },
-  replyBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#eef6f0",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#dde",
-  },
-  replyBarAuthor: { fontSize: 12, fontWeight: "700", color: "#2f6f4f" },
-  replyBarText: { fontSize: 13, color: "#555" },
-  replyBarClose: { fontSize: 16, color: "#888", paddingHorizontal: 8 },
-  attachRow: {
-    flexDirection: "row",
-    gap: 16,
-    paddingHorizontal: 14,
+  container: { flex: 1 },
+  list: { padding: 12, paddingBottom: 16 },
+  emptyContainer: { flexGrow: 1, justifyContent: "center", padding: 32 },
+  bubble: {
+    maxWidth: "82%",
+    borderRadius: 18,
+    paddingHorizontal: 12,
     paddingTop: 8,
-    backgroundColor: "#fff",
+    paddingBottom: 6,
+    marginVertical: 3,
   },
-  attachButton: { padding: 4 },
-  attachIcon: { fontSize: 22 },
+  bubbleMine: { alignSelf: "flex-end", borderBottomRightRadius: 6 },
+  bubbleTheirs: { alignSelf: "flex-start", borderBottomLeftRadius: 6, borderWidth: StyleSheet.hairlineWidth },
+  bubbleText: { fontSize: 16, lineHeight: 21 },
+  deletedText: { fontSize: 15, fontStyle: "italic" },
+  metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 5, marginTop: 3 },
+  time: { fontSize: 11 },
+  status: { fontSize: 11, fontWeight: "600" },
+  image: { width: 232, height: 232, borderRadius: 12, marginBottom: 2 },
+  fileRow: { flexDirection: "row", alignItems: "center", gap: 10, minWidth: 180 },
+  fileIcon: { fontSize: 26 },
+  fileInfo: { flex: 1 },
+  fileName: { fontSize: 15, fontWeight: "600" },
+  fileSize: { fontSize: 12, marginTop: 2 },
+  locationCoords: { fontSize: 12, marginTop: 3 },
+  voiceRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 4, minWidth: 130 },
+  voiceIcon: { fontSize: 15 },
+  voiceTime: { fontSize: 14, fontWeight: "500" },
+  replyQuote: { borderLeftWidth: 3, paddingLeft: 8, marginBottom: 6, opacity: 0.9 },
+  replyQuoteAuthor: { fontSize: 12, fontWeight: "700" },
+  replyQuoteText: { fontSize: 13, marginTop: 1 },
+  empty: { alignItems: "center", gap: 10 },
+  emptyTitle: { fontSize: 20, fontWeight: "700", marginTop: 6 },
+  emptyFingerprint: { fontSize: 11, letterSpacing: 0.5 },
+  emptyText: { fontSize: 14, textAlign: "center", lineHeight: 20, marginTop: 4 },
+  replyBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 9, borderTopWidth: StyleSheet.hairlineWidth },
+  replyBarText: { flex: 1 },
+  replyBarAuthor: { fontSize: 12, fontWeight: "700" },
+  replyBarPreview: { fontSize: 13, marginTop: 1 },
+  replyBarClose: { fontSize: 16, paddingHorizontal: 8 },
+  attachSheet: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingVertical: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  attachAction: { alignItems: "center", gap: 7 },
+  attachIconCircle: { width: 52, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center" },
+  attachIcon: { fontSize: 24 },
+  attachLabel: { fontSize: 12 },
   inputRow: {
     flexDirection: "row",
-    padding: 10,
-    gap: 8,
-    backgroundColor: "#fff",
-    borderTopWidth: 1,
-    borderTopColor: "#eee",
     alignItems: "flex-end",
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
+  plusButton: { width: 38, height: 42, alignItems: "center", justifyContent: "center" },
+  plusIcon: { fontSize: 24 },
   input: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 10,
     maxHeight: 120,
     fontSize: 16,
   },
-  sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#2f6f4f",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sendButtonRecording: { backgroundColor: "#c0392b" },
-  sendButtonText: { color: "#fff", fontSize: 20, fontWeight: "700" },
+  sendButton: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
+  sendIcon: { fontSize: 19, fontWeight: "700" },
 });

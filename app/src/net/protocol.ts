@@ -55,8 +55,13 @@ export interface MsgSendPayload {
   nonce: string;
   replyTo: string | null;
   ttlSec?: number;
-  /** Версия group_keys — только для чата group:family, см. ARCHITECTURE.md §4.6. */
-  keyVersion?: number;
+}
+
+export interface InviteCreatedPayload {
+  code: string;
+  qrPayload: string;
+  expiresAt: number;
+  ttlHours: number;
 }
 
 export interface MsgAcceptedPayload {
@@ -75,7 +80,6 @@ export interface MsgDeliverPayload {
   replyTo: string | null;
   ts: number;
   ttlExpiresAt: number;
-  keyVersion: number | null;
 }
 
 export interface MsgAckPayload {

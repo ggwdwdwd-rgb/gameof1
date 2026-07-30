@@ -13,6 +13,10 @@ export interface AuthResponsePayload {
   signature: string; // base64
 }
 
+export interface InviteCreatePayload {
+  ttlHours?: number;
+}
+
 export interface InviteRedeemPayload {
   code: string;
   deviceId: string;

@@ -34,16 +34,14 @@ CREATE TABLE IF NOT EXISTS outbox (
   created_at     INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS group_keys (
-  chat_id       TEXT NOT NULL,
-  key_version   INTEGER NOT NULL,
-  key_material  TEXT NOT NULL,
-  PRIMARY KEY (chat_id, key_version)
-);
-
 CREATE TABLE IF NOT EXISTS sync_state (
   chat_id       TEXT PRIMARY KEY,
   last_synced_ts INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 `;
 

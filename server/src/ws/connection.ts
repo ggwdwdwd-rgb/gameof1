@@ -5,6 +5,7 @@ import { randomNonceB64 } from "../crypto/verify.js";
 import { handleAuthResponse } from "./handlers/auth.js";
 import { recipientDeviceIds } from "./handlers/chat.js";
 import { handleInviteRedeem } from "./handlers/invite.js";
+import { createInvite } from "../invites.js";
 import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from "./handlers/message.js";
 import { getRosterExcluding } from "./handlers/roster.js";
 import {
@@ -19,6 +20,7 @@ import {
   type AuthResponsePayload,
   type Envelope,
   type HistoryFetchPayload,
+  type InviteCreatePayload,
   type InviteRedeemPayload,
   type MsgAckPayload,
   type MsgDeletePayload,
@@ -111,6 +113,14 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
 
       if (parsed.type === "ping") {
         send(socket, envelope("pong", {}));
+        return;
+      }
+
+      if (parsed.type === "invite.create") {
+        const { ttlHours } = parsed.payload as InviteCreatePayload;
+        const invite = createInvite(userId, ttlHours);
+        send(socket, envelope("invite.created", invite));
+        log.info({ userId }, "выпущен инвайт-код");
         return;
       }
 

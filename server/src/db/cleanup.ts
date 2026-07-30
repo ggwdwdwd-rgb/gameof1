@@ -1,5 +1,5 @@
 import { db } from "./index.js";
-import { GROUP_CHAT_ID, recipientUserIds } from "../ws/handlers/chat.js";
+import { recipientUserIds } from "../ws/handlers/chat.js";
 
 interface PendingRow {
   id: string;
@@ -25,9 +25,7 @@ export function cleanupMessages(): number {
 
   let deliveredCleanup = 0;
   for (const row of pending) {
-    const recipients = row.chat_id === GROUP_CHAT_ID || row.chat_id.startsWith("dm:")
-      ? recipientUserIds(row.chat_id, row.from_user_id)
-      : [];
+    const recipients = recipientUserIds(row.chat_id, row.from_user_id);
     if (recipients.length === 0) continue;
 
     const receipts = db

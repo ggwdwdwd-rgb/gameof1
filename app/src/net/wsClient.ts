@@ -9,6 +9,7 @@ import {
   type AuthOkPayload,
   type ErrorPayload,
   type HistoryPagePayload,
+  type InviteCreatedPayload,
   type InviteRedeemErrorPayload,
   type InviteRedeemOkPayload,
   type MemberJoinedPayload,
@@ -40,6 +41,7 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   authError: (payload: AuthErrorPayload) => void;
   inviteOk: (payload: InviteRedeemOkPayload) => void;
   inviteError: (payload: InviteRedeemErrorPayload) => void;
+  inviteCreated: (payload: InviteCreatedPayload) => void;
   roster: (payload: RosterSnapshotPayload) => void;
   memberJoined: (payload: MemberJoinedPayload) => void;
   msgDeliver: (payload: MsgDeliverPayload) => void;
@@ -53,6 +55,7 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
 
 const PING_INTERVAL_MS = 30_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
+const TYPING_THROTTLE_MS = 2_000;
 
 /**
  * Один WS-клиент на приложение: авторизация (по подписи либо по инвайту),
@@ -68,6 +71,7 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closedByUser = false;
+  private lastTypingSentAt = 0;
 
   constructor(
     private readonly serverUrl: string,
@@ -108,8 +112,24 @@ export class WsClient {
     if (this.ws) this.rawSend(this.ws, "msg.ack", { msgId, chatId, status });
   }
 
+  /**
+   * Троттлинг: раньше пакет уходил на каждое нажатие клавиши. Теперь "печатает"
+   * отправляется не чаще раза в 2 секунды, а "перестал печатать" — всегда.
+   */
   sendTyping(chatId: string, isTyping: boolean): void {
-    if (this.ws) this.rawSend(this.ws, "typing", { chatId, isTyping });
+    if (!this.ws) return;
+    if (isTyping) {
+      const now = Date.now();
+      if (now - this.lastTypingSentAt < TYPING_THROTTLE_MS) return;
+      this.lastTypingSentAt = now;
+    } else {
+      this.lastTypingSentAt = 0;
+    }
+    this.rawSend(this.ws, "typing", { chatId, isTyping });
+  }
+
+  requestInvite(ttlHours?: number): void {
+    if (this.ws) this.rawSend(this.ws, "invite.create", ttlHours ? { ttlHours } : {});
   }
 
   fetchHistory(chatId: string, sinceTs: number): void {
@@ -151,6 +171,9 @@ export class WsClient {
         return;
       case "invite.redeem.error":
         this.events.emit("inviteError", parsed.payload as InviteRedeemErrorPayload);
+        return;
+      case "invite.created":
+        this.events.emit("inviteCreated", parsed.payload as InviteCreatedPayload);
         return;
       case "roster.snapshot":
         this.events.emit("roster", parsed.payload as RosterSnapshotPayload);

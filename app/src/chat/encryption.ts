@@ -1,45 +1,35 @@
 import type { createCrypto } from "@family-messenger/crypto";
 import type { Contact } from "../db/contacts";
-import { getGroupKey, getLatestGroupKeyVersion } from "../db/groupKeys";
 import type { DeviceIdentity } from "../storage/identity";
-import { dmChatId, isGroupChat, otherUserIdInDm } from "./chatId";
+import { otherUserIdInDm } from "./chatId";
 
 type Crypto = ReturnType<typeof createCrypto>;
 
 export interface EncryptedForSend {
   ciphertext: string;
   nonce: string;
-  keyVersion?: number;
 }
 
-/** Общий секрет с конкретным контактом (симметричен: та же функция на обеих сторонах, см. ARCHITECTURE.md §2.2). */
+/** Общий секрет с контактом (симметричен: та же функция на обеих сторонах, см. ARCHITECTURE.md §2.2). */
 export function sharedKeyWithContact(crypto: Crypto, identity: DeviceIdentity, contact: Contact): string {
   return crypto.deriveSharedKey(identity.encryptionSecretKey, contact.encryptionPublicKey);
 }
 
-export async function encryptForChat(
+export type EncryptError = "NO_CONTACT";
+
+export function encryptForChat(
   crypto: Crypto,
   identity: DeviceIdentity,
   chatId: string,
   plaintext: string,
   contactsByUserId: Map<string, Contact>,
-): Promise<EncryptedForSend | null> {
-  if (isGroupChat(chatId)) {
-    const keyVersion = await getLatestGroupKeyVersion(chatId);
-    if (keyVersion === null) return null; // ключ группы ещё не создан/не получен
-    const keyMaterial = await getGroupKey(chatId, keyVersion);
-    if (!keyMaterial) return null;
-    const { ciphertext, nonce } = crypto.encryptWithKey(plaintext, keyMaterial);
-    return { ciphertext, nonce, keyVersion };
-  }
-
+): EncryptedForSend | { error: EncryptError } {
   const otherUserId = otherUserIdInDm(chatId, identity.userId);
   const contact = otherUserId ? contactsByUserId.get(otherUserId) : undefined;
-  if (!contact) return null;
+  if (!contact) return { error: "NO_CONTACT" };
 
   const sharedKey = sharedKeyWithContact(crypto, identity, contact);
-  const { ciphertext, nonce } = crypto.encryptWithKey(plaintext, sharedKey);
-  return { ciphertext, nonce };
+  return crypto.encryptWithKey(plaintext, sharedKey);
 }
 
 export interface DeliveredMessageForDecrypt {
@@ -47,33 +37,24 @@ export interface DeliveredMessageForDecrypt {
   fromUserId: string;
   ciphertext: string;
   nonce: string;
-  keyVersion: number | null;
 }
 
-export async function decryptDeliveredMessage(
+export function decryptDeliveredMessage(
   crypto: Crypto,
   identity: DeviceIdentity,
   message: DeliveredMessageForDecrypt,
   contactsByUserId: Map<string, Contact>,
-): Promise<string | null> {
+): string | null {
   try {
-    if (isGroupChat(message.chatId)) {
-      if (message.keyVersion === null) return null;
-      const keyMaterial = await getGroupKey(message.chatId, message.keyVersion);
-      if (!keyMaterial) return null; // ключ этой версии ещё не получен
-      return crypto.decryptWithKey({ ciphertext: message.ciphertext, nonce: message.nonce }, keyMaterial);
-    }
-
-    const contact = contactsByUserId.get(message.fromUserId);
+    // Ключ ищем по собеседнику чата, а не по отправителю: иначе собственные
+    // сообщения, пришедшие обратно через history.fetch (после переустановки
+    // или на второй сессии), не расшифровывались бы — ключа "сам с собой" нет.
+    const peerUserId = otherUserIdInDm(message.chatId, identity.userId);
+    const contact = peerUserId ? contactsByUserId.get(peerUserId) : undefined;
     if (!contact) return null;
     const sharedKey = sharedKeyWithContact(crypto, identity, contact);
     return crypto.decryptWithKey({ ciphertext: message.ciphertext, nonce: message.nonce }, sharedKey);
   } catch {
     return null; // AEAD-тег не сошёлся — подмена/повреждение/не тот ключ
   }
-}
-
-/** chatId, где myUserId переписывается с contact — используется и для system_group_key DM. */
-export function chatIdWithContact(myUserId: string, contact: Contact): string {
-  return dmChatId(myUserId, contact.userId);
 }

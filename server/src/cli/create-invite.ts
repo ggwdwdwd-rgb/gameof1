@@ -1,14 +1,13 @@
 import qrcodeTerminal from "qrcode-terminal";
 import { runMigrations } from "../db/migrate.js";
 import { db } from "../db/index.js";
-import { env } from "../env.js";
-import { generateInviteCode } from "../util/inviteCode.js";
+import { createInvite } from "../invites.js";
 
 runMigrations();
 
-function parseTtlHours(): number {
+function parseTtlHours(): number | undefined {
   const arg = process.argv.find((a) => a.startsWith("--ttl="));
-  if (!arg) return env.defaultInviteTtlHours;
+  if (!arg) return undefined;
   const value = Number(arg.split("=")[1]);
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error("--ttl должен быть положительным числом часов");
@@ -23,26 +22,7 @@ function earliestUserId(): string | null {
   return row?.id ?? null;
 }
 
-function insertUniqueInvite(ttlHours: number, createdBy: string | null): { code: string; expiresAt: number } {
-  const now = Date.now();
-  const expiresAt = now + ttlHours * 60 * 60 * 1000;
-
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const code = generateInviteCode();
-    const existing = db.prepare("SELECT 1 FROM invites WHERE code = ?").get(code);
-    if (existing) continue; // почти невозможно, но код должен быть точно уникален
-    db.prepare(
-      "INSERT INTO invites (code, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)",
-    ).run(code, createdBy, now, expiresAt);
-    return { code, expiresAt };
-  }
-  throw new Error("Не удалось сгенерировать уникальный код за 10 попыток");
-}
-
-const ttlHours = parseTtlHours();
-const createdBy = earliestUserId();
-const { code, expiresAt } = insertUniqueInvite(ttlHours, createdBy);
-const qrPayload = `familymsg://invite/${code}`;
+const { code, expiresAt, ttlHours, qrPayload } = createInvite(earliestUserId(), parseTtlHours());
 
 console.log("");
 console.log(`Инвайт-код:   ${code}`);

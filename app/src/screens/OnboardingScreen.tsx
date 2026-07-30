@@ -1,16 +1,10 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import React, { useState } from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { getCrypto } from "../crypto/sodium";
 import { saveIdentity, type DeviceIdentity } from "../storage/identity";
 import { WsClient } from "../net/wsClient";
+import { useTheme } from "../theme/ThemeContext";
 import { uuidv4 } from "../util/uuid";
 
 const DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_SERVER_WS_URL ?? "";
@@ -22,6 +16,7 @@ export function OnboardingScreen({
 }: {
   onComplete: (identity: DeviceIdentity) => void;
 }): React.ReactElement {
+  const theme = useTheme();
   const [stage, setStage] = useState<Stage>("form");
   const [code, setCode] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -30,7 +25,7 @@ export function OnboardingScreen({
   const [permission, requestPermission] = useCameraPermissions();
 
   function handleBarcodeScanned(data: string): void {
-    // familymsg://invite/<CODE> либо просто голый код, если кто-то передал текстом
+    // familymsg://invite/<CODE> либо голый код, если его передали текстом
     const match = /invite\/([A-Z0-9]{8})/i.exec(data) ?? /^([A-Z0-9]{8})$/i.exec(data.trim());
     if (match) {
       setCode(match[1]!.toUpperCase());
@@ -44,18 +39,9 @@ export function OnboardingScreen({
     const trimmedName = displayName.trim();
     const trimmedUrl = serverUrl.trim();
 
-    if (trimmedCode.length !== 8) {
-      setError("Код инвайта — 8 символов");
-      return;
-    }
-    if (!trimmedName) {
-      setError("Введите своё имя");
-      return;
-    }
-    if (!trimmedUrl) {
-      setError("Укажите адрес сервера");
-      return;
-    }
+    if (trimmedCode.length !== 8) return setError("Код приглашения состоит из 8 символов");
+    if (!trimmedName) return setError("Укажите, как вас будут видеть остальные");
+    if (!trimmedUrl) return setError("Укажите адрес сервера");
 
     setStage("submitting");
     try {
@@ -120,97 +106,140 @@ export function OnboardingScreen({
   if (stage === "scanning") {
     if (!permission?.granted) {
       return (
-        <View style={styles.container}>
-          <Text style={styles.title}>Нужен доступ к камере</Text>
-          <Pressable style={styles.button} onPress={() => void requestPermission()}>
-            <Text style={styles.buttonText}>Разрешить</Text>
+        <View style={[styles.container, styles.centered, { backgroundColor: theme.colors.background }]}>
+          <Text style={[styles.title, { color: theme.colors.textPrimary }]}>Нужен доступ к камере</Text>
+          <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+            Чтобы отсканировать QR-код приглашения
+          </Text>
+          <Pressable
+            style={[styles.primaryButton, { backgroundColor: theme.colors.accent }]}
+            onPress={() => void requestPermission()}
+          >
+            <Text style={[styles.primaryButtonText, { color: theme.colors.onAccent }]}>Разрешить</Text>
           </Pressable>
           <Pressable style={styles.linkButton} onPress={() => setStage("form")}>
-            <Text style={styles.linkText}>Ввести код вручную</Text>
+            <Text style={[styles.linkText, { color: theme.colors.accent }]}>Ввести код вручную</Text>
           </Pressable>
         </View>
       );
     }
     return (
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: "#000" }]}>
         <CameraView
           style={StyleSheet.absoluteFill}
           barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
           onBarcodeScanned={(result) => handleBarcodeScanned(result.data)}
         />
-        <Pressable style={[styles.button, styles.cancelButton]} onPress={() => setStage("form")}>
-          <Text style={styles.buttonText}>Отмена</Text>
+        <View style={styles.scanOverlay}>
+          <View style={styles.scanFrame} />
+          <Text style={styles.scanHint}>Наведите камеру на QR-код приглашения</Text>
+        </View>
+        <Pressable style={[styles.cancelButton, { backgroundColor: theme.colors.surface }]} onPress={() => setStage("form")}>
+          <Text style={[styles.primaryButtonText, { color: theme.colors.textPrimary }]}>Отмена</Text>
         </Pressable>
       </View>
     );
   }
 
+  const disabled = stage === "submitting";
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Семейный мессенджер</Text>
-      <Text style={styles.subtitle}>Вход только по инвайту от того, кто уже в семье</Text>
+    <KeyboardAvoidingView
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <View style={[styles.logo, { backgroundColor: theme.colors.accent }]}>
+          <Text style={styles.logoText}>C</Text>
+        </View>
+        <Text style={[styles.title, { color: theme.colors.textPrimary }]}>Cry</Text>
+        <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+          Приватные сообщения по приглашению. Вход только с кодом от того, кто уже в мессенджере.
+        </Text>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Код инвайта (8 символов)"
-        autoCapitalize="characters"
-        maxLength={8}
-        value={code}
-        onChangeText={setCode}
-        editable={stage === "form"}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Ваше имя"
-        value={displayName}
-        onChangeText={setDisplayName}
-        editable={stage === "form"}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Адрес сервера (wss://...)"
-        autoCapitalize="none"
-        autoCorrect={false}
-        value={serverUrl}
-        onChangeText={setServerUrl}
-        editable={stage === "form"}
-      />
+        <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+          <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Код приглашения</Text>
+          <TextInput
+            style={[styles.input, styles.codeInput, { color: theme.colors.textPrimary, borderColor: theme.colors.border, backgroundColor: theme.colors.background }]}
+            placeholder="XXXXXXXX"
+            placeholderTextColor={theme.colors.textMuted}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            maxLength={8}
+            value={code}
+            onChangeText={setCode}
+            editable={!disabled}
+          />
 
-      {error && <Text style={styles.error}>{error}</Text>}
+          <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Ваше имя</Text>
+          <TextInput
+            style={[styles.input, { color: theme.colors.textPrimary, borderColor: theme.colors.border, backgroundColor: theme.colors.background }]}
+            placeholder="Как вас подписать"
+            placeholderTextColor={theme.colors.textMuted}
+            value={displayName}
+            onChangeText={setDisplayName}
+            editable={!disabled}
+          />
 
-      {stage === "submitting" ? (
-        <ActivityIndicator style={styles.spinner} />
-      ) : (
-        <>
-          <Pressable style={styles.button} onPress={() => void handleSubmit()}>
-            <Text style={styles.buttonText}>Продолжить</Text>
-          </Pressable>
-          <Pressable style={styles.linkButton} onPress={() => setStage("scanning")}>
-            <Text style={styles.linkText}>Сканировать QR вместо ввода</Text>
-          </Pressable>
-        </>
-      )}
-    </View>
+          <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Адрес сервера</Text>
+          <TextInput
+            style={[styles.input, { color: theme.colors.textPrimary, borderColor: theme.colors.border, backgroundColor: theme.colors.background }]}
+            placeholder="wss://example.com/ws"
+            placeholderTextColor={theme.colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            value={serverUrl}
+            onChangeText={setServerUrl}
+            editable={!disabled}
+          />
+        </View>
+
+        {error && <Text style={[styles.error, { color: theme.colors.danger }]}>{error}</Text>}
+
+        {disabled ? (
+          <ActivityIndicator color={theme.colors.accent} style={styles.loader} />
+        ) : (
+          <>
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryButton,
+                { backgroundColor: theme.colors.accent, opacity: pressed ? 0.85 : 1 },
+              ]}
+              onPress={() => void handleSubmit()}
+            >
+              <Text style={[styles.primaryButtonText, { color: theme.colors.onAccent }]}>Войти</Text>
+            </Pressable>
+            <Pressable style={styles.linkButton} onPress={() => setStage("scanning")}>
+              <Text style={[styles.linkText, { color: theme.colors.accent }]}>Отсканировать QR-код</Text>
+            </Pressable>
+          </>
+        )}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#fff" },
-  title: { fontSize: 22, fontWeight: "700", marginBottom: 4, textAlign: "center" },
-  subtitle: { fontSize: 14, color: "#666", marginBottom: 24, textAlign: "center" },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    fontSize: 16,
-  },
-  error: { color: "#c0392b", marginBottom: 12, textAlign: "center" },
-  button: { backgroundColor: "#2f6f4f", borderRadius: 8, padding: 14, alignItems: "center" },
-  cancelButton: { position: "absolute", bottom: 40, left: 24, right: 24 },
-  buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  linkButton: { marginTop: 16, alignItems: "center" },
-  linkText: { color: "#2f6f4f", fontSize: 14 },
-  spinner: { marginTop: 8 },
+  container: { flex: 1 },
+  centered: { alignItems: "center", justifyContent: "center", padding: 28 },
+  scroll: { padding: 24, paddingTop: 72, paddingBottom: 40 },
+  logo: { width: 68, height: 68, borderRadius: 20, alignSelf: "center", alignItems: "center", justifyContent: "center" },
+  logoText: { color: "#fff", fontSize: 34, fontWeight: "700" },
+  title: { fontSize: 28, fontWeight: "700", textAlign: "center", marginTop: 14 },
+  subtitle: { fontSize: 14, textAlign: "center", lineHeight: 20, marginTop: 8, marginBottom: 24 },
+  card: { borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, padding: 16 },
+  label: { fontSize: 13, marginBottom: 6, marginTop: 10 },
+  input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 },
+  codeInput: { fontSize: 22, fontWeight: "700", letterSpacing: 6, textAlign: "center" },
+  error: { fontSize: 14, textAlign: "center", marginTop: 14 },
+  loader: { marginTop: 24 },
+  primaryButton: { borderRadius: 14, paddingVertical: 15, alignItems: "center", marginTop: 20 },
+  primaryButtonText: { fontSize: 16, fontWeight: "600" },
+  linkButton: { paddingVertical: 14, alignItems: "center" },
+  linkText: { fontSize: 15, fontWeight: "500" },
+  scanOverlay: { flex: 1, alignItems: "center", justifyContent: "center", gap: 20 },
+  scanFrame: { width: 240, height: 240, borderRadius: 24, borderWidth: 3, borderColor: "#ffffffcc" },
+  scanHint: { color: "#fff", fontSize: 15, textAlign: "center", paddingHorizontal: 40 },
+  cancelButton: { position: "absolute", bottom: 42, left: 24, right: 24, borderRadius: 14, paddingVertical: 15, alignItems: "center" },
 });
