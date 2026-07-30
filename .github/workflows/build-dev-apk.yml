@@ -1,0 +1,63 @@
+name: Build dev-client APK (EAS)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Собрать общий крипто-пакет
+        run: |
+          cd packages/crypto
+          npm install
+          npm run build
+
+      - name: Установить зависимости клиента
+        run: |
+          cd app
+          npm install
+
+      - name: Запустить EAS Build (development, Android)
+        working-directory: app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas-cli@latest build --platform android --profile development --non-interactive --wait --json > ../eas-build-result.json
+          cat ../eas-build-result.json
+
+      - name: Скачать APK
+        run: |
+          URL=$(jq -r '.[0].artifacts.buildUrl' eas-build-result.json)
+          echo "APK URL: $URL"
+          curl -L -o family-messenger-dev.apk "$URL"
+
+      - name: Опубликовать в GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-build-${{ github.run_number }}
+          name: "Тестовая dev-client сборка #${{ github.run_number }}"
+          body: |
+            Автоматическая dev-client сборка Android APK (EAS Build, профиль
+            `development`), собрано из коммита ${{ github.sha }}.
+
+            Это **не** финальный релиз — dev-client нужен, чтобы запускать
+            код прямо из Metro (`npx expo start --dev-client`) для разработки
+            и тестирования. Подробности — в `app/README.md`.
+
+            Установка: скачай `family-messenger-dev.apk`, разреши установку
+            из неизвестных источников, установи.
+          files: family-messenger-dev.apk
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
