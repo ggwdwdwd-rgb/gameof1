@@ -1,0 +1,67 @@
+name: Build preview APK (EAS)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Собрать общий крипто-пакет
+        run: |
+          cd packages/crypto
+          npm install
+          npm run build
+
+      - name: Установить зависимости клиента
+        run: |
+          cd app
+          npm install
+
+      - name: Привязать/создать EAS-проект (нужно перед non-interactive build)
+        working-directory: app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx eas-cli@latest init --non-interactive --force
+
+      - name: Запустить EAS Build (preview, Android — автономный APK)
+        working-directory: app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas-cli@latest build --platform android --profile preview --non-interactive --wait --json > ../eas-build-result.json
+          cat ../eas-build-result.json
+
+      - name: Скачать APK
+        run: |
+          URL=$(jq -r '.[0].artifacts.buildUrl' eas-build-result.json)
+          echo "APK URL: $URL"
+          curl -L -o family-messenger.apk "$URL"
+
+      - name: Опубликовать в GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: preview-build-${{ github.run_number }}
+          name: "Автономная сборка (preview) #${{ github.run_number }}"
+          body: |
+            Автономный Android APK (EAS Build, профиль `preview`), собрано
+            из коммита ${{ github.sha }}. В отличие от dev-client-сборки —
+            ставится и работает сама по себе, Metro/компьютер не нужен.
+
+            Установка: скачай `family-messenger.apk`, разреши установку из
+            неизвестных источников, установи. При первом запуске введи код
+            инвайта и адрес сервера (wss://.../ws).
+          files: family-messenger.apk
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
