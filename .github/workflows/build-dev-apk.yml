@@ -31,7 +31,7 @@ jobs:
         working-directory: app
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: npx eas-cli@latest init --non-interactive
+        run: npx eas-cli@latest init --non-interactive --force
 
       - name: Запустить EAS Build (development, Android)
         working-directory: app
