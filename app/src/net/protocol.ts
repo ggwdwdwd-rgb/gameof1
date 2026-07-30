@@ -115,6 +115,17 @@ export interface HistoryPagePayload {
   nextCursor: string | null;
 }
 
+export interface MsgDeletePayload {
+  msgId: string;
+  chatId: string;
+}
+
+export interface MsgDeletedPayload {
+  msgId: string;
+  chatId: string;
+  byUserId: string;
+}
+
 export interface ErrorPayload {
   code: string;
   message: string;

@@ -3,9 +3,9 @@ import { createCrypto } from "@family-messenger/crypto";
 import { getCrypto } from "../crypto/sodium";
 import { getContact, listContacts, upsertContact, type Contact } from "../db/contacts";
 import {
-  assignServerMessageId,
   insertMessage,
   listMessagesForChat,
+  markMessageDeleted,
   messageExists,
   updateMessageStatus,
   type LocalMessage,
@@ -15,6 +15,7 @@ import { getLastSyncedTs, setLastSyncedTs } from "../db/syncState";
 import { decryptDeliveredMessage, encryptForChat } from "../chat/encryption";
 import { GROUP_CHAT_ID, dmChatId } from "../chat/chatId";
 import { bootstrapGroupKeyIfFirstUser, distributeGroupKeyToContact, parseGroupKeyMessage } from "../chat/groupKeySync";
+import { saveIncomingEnvelope, type LocalMediaMeta } from "../chat/media";
 import { WsClient, type ConnectionState } from "../net/wsClient";
 import type { MsgDeliverPayload, RosterMemberPayload } from "../net/protocol";
 import type { DeviceIdentity } from "../storage/identity";
@@ -23,9 +24,12 @@ import { uuidv4 } from "../util/uuid";
 
 type Crypto = ReturnType<typeof createCrypto>;
 
+const MEDIA_CONTENT_TYPES = new Set(["image", "voice", "file"]);
+
 interface ChatEvents extends Record<string, (...args: never[]) => void> {
   messageInserted: (chatId: string) => void;
   messageStatusChanged: (clientMsgId: string) => void;
+  typingChanged: (chatId: string, fromUserId: string, isTyping: boolean) => void;
 }
 
 interface AppContextValue {
@@ -34,6 +38,15 @@ interface AppContextValue {
   contacts: Contact[];
   chatEvents: Emitter<ChatEvents>;
   sendText: (chatId: string, text: string, replyTo?: string | null) => Promise<void>;
+  sendMedia: (
+    chatId: string,
+    contentType: "image" | "voice" | "file",
+    envelopeJson: string,
+    localMeta: LocalMediaMeta,
+    replyTo?: string | null,
+  ) => Promise<void>;
+  sendLocation: (chatId: string, lat: number, lng: number, replyTo?: string | null) => Promise<void>;
+  deleteMessage: (msgId: string, chatId: string) => Promise<void>;
   markRead: (msgId: string, chatId: string) => void;
   setTyping: (chatId: string, isTyping: boolean) => void;
   loadMessages: (chatId: string) => Promise<LocalMessage[]>;
@@ -148,6 +161,16 @@ export function AppProvider({
         });
       });
 
+      ws.events.on("typingRelay", (payload) => {
+        chatEvents.emit("typingChanged", payload.chatId, payload.fromUserId, payload.isTyping);
+      });
+
+      ws.events.on("msgDeleted", (payload) => {
+        void markMessageDeleted(payload.msgId).then(() => {
+          chatEvents.emit("messageInserted", payload.chatId);
+        });
+      });
+
       ws.events.on("historyPage", (payload) => {
         void (async () => {
           let maxTs = 0;
@@ -170,47 +193,70 @@ export function AppProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const value = useMemo<AppContextValue>(
-    () => ({
+  const value = useMemo<AppContextValue>(() => {
+    /** Общая часть sendText/sendMedia/sendLocation: шифрование + локальная запись + отправка. */
+    async function sendEncrypted(
+      chatId: string,
+      contentType: string,
+      wireContent: string,
+      localPlaintext: string,
+      replyTo: string | null,
+    ): Promise<void> {
+      const crypto = cryptoRef.current;
+      const ws = wsRef.current;
+      if (!crypto || !ws) return;
+
+      const contactsByUserId = new Map(contactsRef.current.map((c) => [c.userId, c]));
+      const encrypted = await encryptForChat(crypto, identity, chatId, wireContent, contactsByUserId);
+      if (!encrypted) return; // нет ключа (ещё не пришёл group key/контакт неизвестен) — сообщение не уйдёт молча
+
+      const clientMsgId = uuidv4();
+      const createdAt = Date.now();
+
+      await insertMessage({
+        id: clientMsgId,
+        clientMsgId,
+        chatId,
+        fromUserId: identity.userId,
+        contentType,
+        plaintext: localPlaintext,
+        replyTo,
+        status: "pending",
+        createdAt,
+        deletedAt: null,
+      });
+      chatEvents.emit("messageInserted", chatId);
+
+      await ws.sendMessage({
+        clientMsgId,
+        chatId,
+        contentType,
+        ciphertext: encrypted.ciphertext,
+        nonce: encrypted.nonce,
+        replyTo,
+        keyVersion: encrypted.keyVersion,
+      });
+    }
+
+    return {
       identity,
       connectionState,
       contacts,
       chatEvents,
       async sendText(chatId, text, replyTo = null) {
-        const crypto = cryptoRef.current;
-        const ws = wsRef.current;
-        if (!crypto || !ws) return;
-
-        const contactsByUserId = new Map(contactsRef.current.map((c) => [c.userId, c]));
-        const encrypted = await encryptForChat(crypto, identity, chatId, text, contactsByUserId);
-        if (!encrypted) return; // нет ключа (ещё не пришёл group key/контакт неизвестен) — сообщение не уйдёт молча
-
-        const clientMsgId = uuidv4();
-        const createdAt = Date.now();
-
-        await insertMessage({
-          id: clientMsgId,
-          clientMsgId,
-          chatId,
-          fromUserId: identity.userId,
-          contentType: "text",
-          plaintext: text,
-          replyTo,
-          status: "pending",
-          createdAt,
-          deletedAt: null,
-        });
+        await sendEncrypted(chatId, "text", text, text, replyTo);
+      },
+      async sendMedia(chatId, contentType, envelopeJson, localMeta, replyTo = null) {
+        await sendEncrypted(chatId, contentType, envelopeJson, JSON.stringify(localMeta), replyTo);
+      },
+      async sendLocation(chatId, lat, lng, replyTo = null) {
+        const json = JSON.stringify({ lat, lng });
+        await sendEncrypted(chatId, "location", json, json, replyTo);
+      },
+      async deleteMessage(msgId, chatId) {
+        await markMessageDeleted(msgId);
         chatEvents.emit("messageInserted", chatId);
-
-        await ws.sendMessage({
-          clientMsgId,
-          chatId,
-          contentType: "text",
-          ciphertext: encrypted.ciphertext,
-          nonce: encrypted.nonce,
-          replyTo,
-          keyVersion: encrypted.keyVersion,
-        });
+        wsRef.current?.deleteMessage(msgId, chatId);
       },
       markRead(msgId, chatId) {
         wsRef.current?.ackMessage(msgId, chatId, "read");
@@ -221,9 +267,8 @@ export function AppProvider({
       async loadMessages(chatId) {
         return listMessagesForChat(chatId);
       },
-    }),
-    [identity, connectionState, contacts, chatEvents],
-  );
+    };
+  }, [identity, connectionState, contacts, chatEvents]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
@@ -253,7 +298,14 @@ async function handleIncomingMessage(
 
   const contactsList = await listContacts();
   const contactsByUserId = new Map(contactsList.map((c) => [c.userId, c]));
-  const plaintext = await decryptDeliveredMessage(crypto, identity, payload, contactsByUserId);
+  const decrypted = await decryptDeliveredMessage(crypto, identity, payload, contactsByUserId);
+
+  // Для медиа конверт содержит сырые base64-данные — на диск пишем один раз,
+  // в sqlite кладём только метаданные (см. src/chat/media.ts).
+  const plaintext =
+    decrypted && MEDIA_CONTENT_TYPES.has(payload.contentType)
+      ? JSON.stringify(saveIncomingEnvelope(decrypted, payload.msgId))
+      : decrypted;
 
   await insertMessage({
     id: payload.msgId,

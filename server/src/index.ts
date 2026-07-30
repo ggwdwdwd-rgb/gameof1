@@ -23,7 +23,11 @@ setInterval(() => {
   if (removed > 0) app.log.info({ removed }, "очистка доставленных/просроченных сообщений");
 }, ONE_HOUR_MS).unref();
 
-await app.register(fastifyWebsocket);
+// Файлы до 25 МБ идут как base64 внутри base64 (сырые байты -> JSON-конверт ->
+// AEAD-шифротекст -> сам base64 на провод) — конечный размер пакета может
+// доходить до ~45 МБ, дефолтный лимит `ws` (100 МБ) и так хватает, но задаём
+// явно, чтобы не зависеть молча от чужого дефолта.
+await app.register(fastifyWebsocket, { options: { maxPayload: 64 * 1024 * 1024 } });
 
 app.get("/healthz", async () => ({ status: "ok", connectedDevices: connectedDeviceCount() }));
 

@@ -1,7 +1,7 @@
 import { db } from "../../db/index.js";
 import { env } from "../../env.js";
 import { isParticipant, recipientUserIds } from "./chat.js";
-import type { HistoryFetchPayload, MsgAckPayload, MsgSendPayload } from "../types.js";
+import type { HistoryFetchPayload, MsgAckPayload, MsgDeletePayload, MsgSendPayload } from "../types.js";
 
 export interface DeliverableMessage {
   msgId: string;
@@ -116,6 +116,22 @@ export function handleMsgAck(ackerUserId: string, payload: MsgAckPayload): MsgAc
   ).run(payload.msgId, ackerUserId, payload.status, Date.now());
 
   return { fromUserId: message.from_user_id, fromDeviceId: message.from_device_id };
+}
+
+export type MsgDeleteResult =
+  | { ok: true; chatId: string }
+  | { ok: false; code: "NOT_FOUND" | "NOT_OWNER" };
+
+/** Удалить у всех может только автор сообщения (см. ARCHITECTURE.md — "удаление у всех"). */
+export function handleMsgDelete(fromUserId: string, payload: MsgDeletePayload): MsgDeleteResult {
+  const message = db
+    .prepare("SELECT chat_id, from_user_id FROM messages WHERE id = ?")
+    .get(payload.msgId) as { chat_id: string; from_user_id: string } | undefined;
+  if (!message) return { ok: false, code: "NOT_FOUND" };
+  if (message.from_user_id !== fromUserId) return { ok: false, code: "NOT_OWNER" };
+
+  db.prepare("UPDATE messages SET deleted_at = ? WHERE id = ?").run(Date.now(), payload.msgId);
+  return { ok: true, chatId: message.chat_id };
 }
 
 export function handleHistoryFetch(userId: string, payload: HistoryFetchPayload): DeliverableMessage[] | null {

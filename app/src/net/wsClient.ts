@@ -14,6 +14,7 @@ import {
   type MemberJoinedPayload,
   type MsgAcceptedPayload,
   type MsgAckRelayPayload,
+  type MsgDeletedPayload,
   type MsgDeliverPayload,
   type MsgSendPayload,
   type RosterSnapshotPayload,
@@ -44,6 +45,7 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   msgDeliver: (payload: MsgDeliverPayload) => void;
   msgAccepted: (payload: MsgAcceptedPayload) => void;
   ackRelay: (payload: MsgAckRelayPayload) => void;
+  msgDeleted: (payload: MsgDeletedPayload) => void;
   typingRelay: (payload: TypingRelayPayload) => void;
   historyPage: (payload: HistoryPagePayload) => void;
   errorPacket: (payload: ErrorPayload) => void;
@@ -114,6 +116,10 @@ export class WsClient {
     if (this.ws) this.rawSend(this.ws, "history.fetch", { chatId, sinceTs, limit: 200 });
   }
 
+  deleteMessage(msgId: string, chatId: string): void {
+    if (this.ws) this.rawSend(this.ws, "msg.delete", { msgId, chatId });
+  }
+
   private setState(state: ConnectionState): void {
     this.state = state;
     this.events.emit("state", state);
@@ -163,6 +169,9 @@ export class WsClient {
       }
       case "msg.ackRelay":
         this.events.emit("ackRelay", parsed.payload as MsgAckRelayPayload);
+        return;
+      case "msg.deleted":
+        this.events.emit("msgDeleted", parsed.payload as MsgDeletedPayload);
         return;
       case "typing.relay":
         this.events.emit("typingRelay", parsed.payload as TypingRelayPayload);

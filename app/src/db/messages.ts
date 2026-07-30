@@ -69,12 +69,6 @@ export async function updateMessageStatus(clientMsgId: string, status: MessageSt
   await db.runAsync("UPDATE messages SET status = ? WHERE client_msg_id = ?", [status, clientMsgId]);
 }
 
-/** Проставляет серверный msgId после msg.accepted (изначально id == clientMsgId). */
-export async function assignServerMessageId(clientMsgId: string, serverMsgId: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync("UPDATE messages SET id = ? WHERE client_msg_id = ?", [serverMsgId, clientMsgId]);
-}
-
 export async function listMessagesForChat(chatId: string, limit = 200): Promise<LocalMessage[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<MessageRow>(

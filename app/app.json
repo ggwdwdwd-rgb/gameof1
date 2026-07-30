@@ -32,6 +32,26 @@
         {
           "cameraPermission": "Камера нужна, чтобы отсканировать QR-код инвайта."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Доступ к галерее нужен, чтобы отправить фото в чат.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Микрофон нужен, чтобы записать и отправить голосовое сообщение."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Геолокация нужна, чтобы один раз отправить её в чат кнопкой «я тут»."
+        }
       ]
     ]
   }

@@ -18,11 +18,18 @@ const STATE_LABELS: Record<string, string> = {
   connected: "В сети",
 };
 
+const MEDIA_PREVIEWS: Record<string, string> = {
+  image: "📷 Фото",
+  voice: "🎤 Голосовое",
+  file: "📎 Файл",
+  location: "📍 Геолокация",
+};
+
 function previewText(message: LocalMessage | null): string {
   if (!message) return "Нет сообщений";
   if (message.deletedAt) return "Сообщение удалено";
-  if (message.contentType !== "text") return "[вложение]";
-  return message.plaintext ?? "…";
+  if (message.contentType === "text") return message.plaintext ?? "…";
+  return MEDIA_PREVIEWS[message.contentType] ?? "[вложение]";
 }
 
 export function ChatListScreen({ onOpenChat }: { onOpenChat: (chatId: string, title: string) => void }): React.ReactElement {

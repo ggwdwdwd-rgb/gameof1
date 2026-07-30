@@ -5,7 +5,7 @@ import { randomNonceB64 } from "../crypto/verify.js";
 import { handleAuthResponse } from "./handlers/auth.js";
 import { recipientDeviceIds } from "./handlers/chat.js";
 import { handleInviteRedeem } from "./handlers/invite.js";
-import { handleHistoryFetch, handleMsgAck, handleMsgSend } from "./handlers/message.js";
+import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from "./handlers/message.js";
 import { getRosterExcluding } from "./handlers/roster.js";
 import {
   broadcastToAllExcept,
@@ -21,6 +21,7 @@ import {
   type HistoryFetchPayload,
   type InviteRedeemPayload,
   type MsgAckPayload,
+  type MsgDeletePayload,
   type MsgSendPayload,
   type TypingPayload,
 } from "./types.js";
@@ -136,6 +137,20 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
             envelope("msg.ackRelay", { msgId: payload.msgId, chatId: payload.chatId, byUserId: userId, status: payload.status, ts: Date.now() }),
           );
         }
+        return;
+      }
+
+      if (parsed.type === "msg.delete") {
+        const payload = parsed.payload as MsgDeletePayload;
+        const result = handleMsgDelete(userId, payload);
+        if (!result.ok) {
+          send(socket, envelope("error", { code: result.code, message: "Сообщение не удалено" }));
+          return;
+        }
+        for (const recipientDeviceId of recipientDeviceIds(result.chatId, userId)) {
+          sendToDevice(recipientDeviceId, envelope("msg.deleted", { msgId: payload.msgId, chatId: result.chatId, byUserId: userId }));
+        }
+        send(socket, envelope("msg.deleted", { msgId: payload.msgId, chatId: result.chatId, byUserId: userId }));
         return;
       }
 
