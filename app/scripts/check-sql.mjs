@@ -9,6 +9,7 @@
 import { createRequire } from "node:module";
 import {
   MARK_CHAT_READ,
+  REQUIRED_COLUMNS,
   SCHEMA,
   SELECT_CHAT_UNREAD,
   SELECT_LAST_MESSAGES,
@@ -107,6 +108,64 @@ check("очередь квитанций не дублирует сообщен�
 check("повторная запись обновляет статус", pending[0].status === "read", pending[0].status);
 db.prepare("DELETE FROM pending_acks WHERE msg_id = ?").run("in1");
 check("отправленная квитанция убирается из очереди", db.prepare("SELECT COUNT(*) AS n FROM pending_acks").get().n === 1);
+
+// ── Обновление старой базы ─────────────────────────────────────────────────
+// Именно этого теста и не хватало: столбец local_name я добавил в CREATE TABLE
+// IF NOT EXISTS, а у всех, кто обновился, таблица уже была — и приложение
+// падало с «no such column: local_name». Здесь воссоздаём базу прошлой версии
+// и проверяем, что миграция её дотягивает.
+const legacy = new Database(":memory:");
+legacy.exec(`
+CREATE TABLE contacts (
+  user_id               TEXT PRIMARY KEY,
+  device_id             TEXT NOT NULL,
+  display_name          TEXT NOT NULL,
+  identity_public_key   TEXT NOT NULL,
+  encryption_public_key TEXT NOT NULL,
+  fingerprint           TEXT NOT NULL,
+  is_revoked            INTEGER NOT NULL DEFAULT 0
+);`);
+legacy.prepare(
+  "INSERT INTO contacts VALUES ('u1','d1','Аня','ipk','epk','FFFF',0)",
+).run();
+
+function columnsOf(db, table) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+}
+check("в старой базе столбца local_name нет", !columnsOf(legacy, "contacts").includes("local_name"));
+
+// Тот же порядок, что в приложении: схема, затем досоздание столбцов.
+legacy.exec(SCHEMA);
+check("CREATE TABLE IF NOT EXISTS сам столбец не добавляет", !columnsOf(legacy, "contacts").includes("local_name"));
+
+for (const { table, column, definition } of REQUIRED_COLUMNS) {
+  if (columnsOf(legacy, table).includes(column)) continue;
+  legacy.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+check("миграция добавляет local_name", columnsOf(legacy, "contacts").includes("local_name"));
+check(
+  "данные старой базы не потеряны",
+  legacy.prepare("SELECT display_name, local_name FROM contacts WHERE user_id = 'u1'").get().display_name === "Аня",
+);
+check(
+  "у старых контактов local_name пустой",
+  legacy.prepare("SELECT local_name FROM contacts WHERE user_id = 'u1'").get().local_name === null,
+);
+
+// Повторный запуск не должен ломаться на уже добавленном столбце.
+let secondRunFailed = false;
+try {
+  for (const { table, column, definition } of REQUIRED_COLUMNS) {
+    if (columnsOf(legacy, table).includes(column)) continue;
+    legacy.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+} catch {
+  secondRunFailed = true;
+}
+check("повторный запуск миграции безопасен", !secondRunFailed);
+
+// В базе, созданной с нуля, столбец есть сразу — миграции делать нечего.
+check("в новой базе local_name есть сразу", columnsOf(freshDb(), "contacts").includes("local_name"));
 
 // ── Пустая база ────────────────────────────────────────────────────────────
 const empty = freshDb();
