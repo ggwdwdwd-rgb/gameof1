@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import QRCode from "react-native-qrcode-svg";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useApp } from "../context/AppContext";
 import type { InviteCreatedPayload } from "../net/protocol";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme/ThemeContext";
 import { Header } from "../ui/Header";
+import { Icon } from "../ui/Icon";
 
 const INVITE_ERRORS: Record<"OFFLINE" | "TIMEOUT" | "SERVER_OUTDATED", string> = {
   OFFLINE:
@@ -77,7 +78,11 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
 
         {error && (
           <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
-            <Text style={[styles.errorText, { color: theme.colors.danger }]}>{error}</Text>
+            <View style={styles.errorHead}>
+              <Icon name="alert" size={20} color={theme.colors.danger} />
+              <Text style={[styles.errorTitle, { color: theme.colors.danger }]}>Код не получен</Text>
+            </View>
+            <Text style={[styles.errorText, { color: theme.colors.textSecondary }]}>{error}</Text>
             {/* Адрес видно и при ошибке: опечатка в нём — частая причина отказа. */}
             <Text style={[styles.hint, { color: theme.colors.textMuted }]}>Адрес сервера: {identity.serverUrl}</Text>
           </View>
@@ -85,35 +90,20 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
 
         {invite && (
           <>
-            <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
-              <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Код приглашения</Text>
+            {/* QR на белом поле всегда: сканеры плохо читают инвертированный код. */}
+            <View style={[styles.qrCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+              <View style={styles.qrBox}>
+                <QRCode value={invite.qrPayload} size={208} backgroundColor="#ffffff" color="#141413" />
+              </View>
               <Text style={[styles.code, { color: theme.colors.textPrimary }]}>{invite.code}</Text>
-              <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
-                Одноразовый, действует {invite.ttlHours} ч. (до{" "}
+              <Text style={[styles.codeHint, { color: theme.colors.textMuted }]}>
+                Одноразовый, действует {invite.ttlHours} ч. — до{" "}
                 {new Date(invite.expiresAt).toLocaleString("ru-RU", {
                   day: "2-digit",
                   month: "2-digit",
                   hour: "2-digit",
                   minute: "2-digit",
                 })}
-                )
-              </Text>
-            </View>
-
-            <View style={[styles.card, styles.qrCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
-              <View style={styles.qrBox}>
-                <QRCode value={invite.qrPayload} size={196} backgroundColor="#ffffff" color="#000000" />
-              </View>
-              <Text style={[styles.hint, { color: theme.colors.textMuted, textAlign: "center" }]}>
-                Пусть новый участник отсканирует этот код при первом запуске приложения
-              </Text>
-            </View>
-
-            <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
-              <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Адрес сервера</Text>
-              <Text style={[styles.serverUrl, { color: theme.colors.textPrimary }]}>{identity.serverUrl}</Text>
-              <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
-                Его тоже нужно ввести на новом устройстве
               </Text>
             </View>
 
@@ -124,13 +114,38 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
               ]}
               onPress={() => void handleShare()}
             >
-              <Text style={[styles.primaryButtonText, { color: theme.colors.onAccent }]}>Поделиться</Text>
+              <Icon name="share" size={19} color={theme.colors.onAccent} />
+              <Text style={[styles.primaryButtonText, { color: theme.colors.onAccent }]}>Поделиться кодом</Text>
             </Pressable>
+
+            <View style={[styles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+              <Text style={[styles.label, { color: theme.colors.textMuted }]}>АДРЕС СЕРВЕРА</Text>
+              <Text style={[styles.serverUrl, { color: theme.colors.textPrimary }]}>{identity.serverUrl}</Text>
+              <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+                Его тоже нужно ввести на новом устройстве — или он подставится сам при сканировании QR.
+              </Text>
+            </View>
+
+            <View style={[styles.steps, { borderColor: theme.colors.border }]}>
+              {[
+                "Покажите QR-код или продиктуйте код из 8 символов",
+                "Новый участник вводит его при первом запуске Cry",
+                "После входа он появится в списке чатов у всех",
+              ].map((step, index) => (
+                <View key={step} style={styles.step}>
+                  <View style={[styles.stepNumber, { backgroundColor: theme.colors.accentSoft }]}>
+                    <Text style={[styles.stepNumberText, { color: theme.colors.accent }]}>{index + 1}</Text>
+                  </View>
+                  <Text style={[styles.stepText, { color: theme.colors.textSecondary }]}>{step}</Text>
+                </View>
+              ))}
+            </View>
           </>
         )}
 
         {!loading && (
           <Pressable style={styles.secondaryButton} onPress={() => void generate()}>
+            <Icon name="refresh" size={18} color={theme.colors.accent} />
             <Text style={[styles.secondaryButtonText, { color: theme.colors.accent }]}>
               {invite ? "Создать ещё один код" : "Попробовать снова"}
             </Text>
@@ -143,19 +158,34 @@ export function AddPersonScreen({ onBack }: { onBack: () => void }): React.React
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { padding: 16, gap: 12 },
-  loader: { marginTop: 24, alignItems: "center", gap: 10 },
-  loaderText: { fontSize: 13 },
-  card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, padding: 16 },
-  qrCard: { alignItems: "center", gap: 12 },
-  qrBox: { backgroundColor: "#fff", padding: 12, borderRadius: 12 },
-  label: { fontSize: 13, marginBottom: 6 },
-  code: { fontSize: 34, fontWeight: "700", letterSpacing: 4 },
+  content: { padding: 16, gap: 14 },
+  loader: { marginTop: 28, alignItems: "center", gap: 12 },
+  loaderText: { fontSize: 13.5 },
+  card: { borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, padding: 16 },
+  qrCard: { borderRadius: 22, borderWidth: StyleSheet.hairlineWidth, padding: 20, alignItems: "center" },
+  qrBox: { backgroundColor: "#fff", padding: 14, borderRadius: 16 },
+  code: { fontSize: 34, fontWeight: "700", letterSpacing: 6, marginTop: 18 },
+  codeHint: { fontSize: 12.5, marginTop: 8, textAlign: "center", lineHeight: 18 },
+  errorHead: { flexDirection: "row", alignItems: "center", gap: 9, marginBottom: 10 },
+  errorTitle: { fontSize: 15, fontWeight: "600" },
+  errorText: { fontSize: 13.5, lineHeight: 19 },
+  label: { fontSize: 11.5, fontWeight: "700", letterSpacing: 0.8, marginBottom: 7 },
   serverUrl: { fontSize: 15, fontWeight: "500" },
-  hint: { fontSize: 12, marginTop: 8, lineHeight: 17 },
-  errorText: { fontSize: 14 },
-  primaryButton: { borderRadius: 14, paddingVertical: 15, alignItems: "center", marginTop: 4 },
+  hint: { fontSize: 12.5, marginTop: 10, lineHeight: 18 },
+  primaryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+    borderRadius: 15,
+    paddingVertical: 16,
+  },
   primaryButtonText: { fontSize: 16, fontWeight: "600" },
-  secondaryButton: { paddingVertical: 14, alignItems: "center" },
+  steps: { borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, padding: 16, gap: 14 },
+  step: { flexDirection: "row", alignItems: "center", gap: 12 },
+  stepNumber: { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  stepNumberText: { fontSize: 13, fontWeight: "700" },
+  stepText: { flex: 1, fontSize: 13.5, lineHeight: 19 },
+  secondaryButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 15 },
   secondaryButtonText: { fontSize: 15, fontWeight: "500" },
 });

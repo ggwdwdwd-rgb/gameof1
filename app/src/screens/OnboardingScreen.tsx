@@ -6,6 +6,8 @@ import { getCrypto } from "../crypto/sodium";
 import { saveIdentity, type DeviceIdentity } from "../storage/identity";
 import { WsClient } from "../net/wsClient";
 import { useTheme } from "../theme/ThemeContext";
+import { Icon } from "../ui/Icon";
+import { LogoMark } from "../ui/LogoMark";
 import { uuidv4 } from "../util/uuid";
 
 const DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_SERVER_WS_URL ?? "";
@@ -109,6 +111,9 @@ export function OnboardingScreen({
     if (!permission?.granted) {
       return (
         <View style={[styles.container, styles.centered, { backgroundColor: theme.colors.background }]}>
+          <View style={[styles.permissionIcon, { backgroundColor: theme.colors.accentSoft }]}>
+            <Icon name="camera" size={34} color={theme.colors.accent} />
+          </View>
           <Text style={[styles.title, { color: theme.colors.textPrimary }]}>Нужен доступ к камере</Text>
           <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
             Чтобы отсканировать QR-код приглашения
@@ -133,7 +138,12 @@ export function OnboardingScreen({
           onBarcodeScanned={(result) => handleBarcodeScanned(result.data)}
         />
         <View style={styles.scanOverlay}>
-          <View style={styles.scanFrame} />
+          <View style={styles.scanFrame}>
+            <View style={[styles.corner, styles.cornerTopLeft]} />
+            <View style={[styles.corner, styles.cornerTopRight]} />
+            <View style={[styles.corner, styles.cornerBottomLeft]} />
+            <View style={[styles.corner, styles.cornerBottomRight]} />
+          </View>
           <Text style={styles.scanHint}>Наведите камеру на QR-код приглашения</Text>
         </View>
         <Pressable style={[styles.cancelButton, { backgroundColor: theme.colors.surface }]} onPress={() => setStage("form")}>
@@ -154,8 +164,8 @@ export function OnboardingScreen({
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 32 }]}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={[styles.logo, { backgroundColor: theme.colors.accent }]}>
-          <Text style={styles.logoText}>C</Text>
+        <View style={styles.logoWrap}>
+          <LogoMark size={78} />
         </View>
         <Text style={[styles.title, { color: theme.colors.textPrimary }]}>Cry</Text>
         <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
@@ -200,7 +210,12 @@ export function OnboardingScreen({
           />
         </View>
 
-        {error && <Text style={[styles.error, { color: theme.colors.danger }]}>{error}</Text>}
+        {error && (
+          <View style={[styles.errorBox, { backgroundColor: theme.colors.accentSoft }]}>
+            <Icon name="alert" size={18} color={theme.colors.danger} />
+            <Text style={[styles.error, { color: theme.colors.danger }]}>{error}</Text>
+          </View>
+        )}
 
         {disabled ? (
           <ActivityIndicator color={theme.colors.accent} style={styles.loader} />
@@ -216,6 +231,7 @@ export function OnboardingScreen({
               <Text style={[styles.primaryButtonText, { color: theme.colors.onAccent }]}>Войти</Text>
             </Pressable>
             <Pressable style={styles.linkButton} onPress={() => setStage("scanning")}>
+              <Icon name="qr" size={19} color={theme.colors.accent} />
               <Text style={[styles.linkText, { color: theme.colors.accent }]}>Отсканировать QR-код</Text>
             </Pressable>
           </>
@@ -229,22 +245,57 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   centered: { alignItems: "center", justifyContent: "center", padding: 28 },
   scroll: { padding: 24 },
-  logo: { width: 68, height: 68, borderRadius: 20, alignSelf: "center", alignItems: "center", justifyContent: "center" },
-  logoText: { color: "#fff", fontSize: 34, fontWeight: "700" },
-  title: { fontSize: 28, fontWeight: "700", textAlign: "center", marginTop: 14 },
-  subtitle: { fontSize: 14, textAlign: "center", lineHeight: 20, marginTop: 8, marginBottom: 24 },
-  card: { borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, padding: 16 },
-  label: { fontSize: 13, marginBottom: 6, marginTop: 10 },
-  input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 },
-  codeInput: { fontSize: 22, fontWeight: "700", letterSpacing: 6, textAlign: "center" },
-  error: { fontSize: 14, textAlign: "center", marginTop: 14 },
-  loader: { marginTop: 24 },
-  primaryButton: { borderRadius: 14, paddingVertical: 15, alignItems: "center", marginTop: 20 },
+  permissionIcon: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+  },
+  logoWrap: { alignSelf: "center" },
+  title: { fontSize: 30, fontWeight: "700", textAlign: "center", marginTop: 18, letterSpacing: -0.6 },
+  subtitle: { fontSize: 14.5, textAlign: "center", lineHeight: 21, marginTop: 10, marginBottom: 26 },
+  card: { borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, padding: 18 },
+  label: { fontSize: 12.5, fontWeight: "600", marginBottom: 7, marginTop: 14 },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 13,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 16,
+  },
+  codeInput: { fontSize: 23, fontWeight: "700", letterSpacing: 7, textAlign: "center" },
+  errorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 13,
+    padding: 13,
+    marginTop: 16,
+  },
+  error: { flex: 1, fontSize: 13.5, lineHeight: 19 },
+  loader: { marginTop: 26 },
+  primaryButton: { borderRadius: 15, paddingVertical: 16, alignItems: "center", marginTop: 22 },
   primaryButtonText: { fontSize: 16, fontWeight: "600" },
-  linkButton: { paddingVertical: 14, alignItems: "center" },
+  linkButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 16 },
   linkText: { fontSize: 15, fontWeight: "500" },
-  scanOverlay: { flex: 1, alignItems: "center", justifyContent: "center", gap: 20 },
-  scanFrame: { width: 240, height: 240, borderRadius: 24, borderWidth: 3, borderColor: "#ffffffcc" },
-  scanHint: { color: "#fff", fontSize: 15, textAlign: "center", paddingHorizontal: 40 },
-  cancelButton: { position: "absolute", bottom: 32, left: 24, right: 24, borderRadius: 14, paddingVertical: 15, alignItems: "center" },
+  scanOverlay: { flex: 1, alignItems: "center", justifyContent: "center", gap: 26 },
+  // Рамка уголками: не перекрывает сам код и выглядит аккуратнее сплошной.
+  scanFrame: { width: 246, height: 246 },
+  corner: { position: "absolute", width: 40, height: 40, borderColor: "#fff" },
+  cornerTopLeft: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 20 },
+  cornerTopRight: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 20 },
+  cornerBottomLeft: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4, borderBottomLeftRadius: 20 },
+  cornerBottomRight: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4, borderBottomRightRadius: 20 },
+  scanHint: { color: "#fff", fontSize: 15, textAlign: "center", paddingHorizontal: 40, lineHeight: 21 },
+  cancelButton: {
+    position: "absolute",
+    bottom: 36,
+    left: 24,
+    right: 24,
+    borderRadius: 15,
+    paddingVertical: 16,
+    alignItems: "center",
+  },
 });

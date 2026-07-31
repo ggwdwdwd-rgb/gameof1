@@ -87,6 +87,21 @@ export async function getLastMessageForChat(chatId: string): Promise<LocalMessag
   return row ? fromRow(row) : null;
 }
 
+/**
+ * Непрочитанные — входящие сообщения, до которых пользователь ещё не доходил.
+ * Статус "read" ставится при открытии чата, поэтому всё, что осталось
+ * "delivered" от собеседника, и есть непрочитанное.
+ */
+export async function countUnreadForChat(chatId: string, myUserId: string): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM messages
+     WHERE chat_id = ? AND from_user_id != ? AND status = 'delivered' AND deleted_at IS NULL`,
+    [chatId, myUserId],
+  );
+  return row?.n ?? 0;
+}
+
 export async function messageExists(clientMsgId: string): Promise<boolean> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ client_msg_id: string }>(

@@ -10,6 +10,7 @@ import { OnboardingScreen } from "./src/screens/OnboardingScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { loadIdentity, type DeviceIdentity } from "./src/storage/identity";
 import { ThemeProvider, useTheme } from "./src/theme/ThemeContext";
+import { LogoMark } from "./src/ui/LogoMark";
 
 type Screen =
   | { name: "chatList" }
@@ -33,7 +34,8 @@ function Root(): React.ReactElement {
   if (loading) {
     return (
       <View style={[styles.loading, { backgroundColor: theme.colors.background }]}>
-        <ActivityIndicator size="large" color={theme.colors.accent} />
+        <LogoMark size={82} />
+        <ActivityIndicator color={theme.colors.accent} style={styles.loadingSpinner} />
         <StatusBar style={theme.colors.statusBar} />
       </View>
     );
@@ -84,4 +86,5 @@ export default function App(): React.ReactElement {
 
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
+  loadingSpinner: { marginTop: 26 },
 });

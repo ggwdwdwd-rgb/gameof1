@@ -7,14 +7,13 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
   Image,
   KeyboardAvoidingView,
   Linking,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -27,18 +26,22 @@ import { getCurrentLocationOnce, pickAndCompressImage, pickFile } from "../chat/
 import { useApp, type SendResult } from "../context/AppContext";
 import { listMessagesForChat, type LocalMessage } from "../db/messages";
 import { useTheme } from "../theme/ThemeContext";
-import type { Theme } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
 import { Header } from "../ui/Header";
+import { Icon, type IconName } from "../ui/Icon";
 import { useKeyboardVisible } from "../ui/useKeyboardVisible";
+import { Wallpaper } from "../ui/Wallpaper";
 import { uuidv4 } from "../util/uuid";
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: "○",
-  sent: "✓",
-  delivered: "✓✓",
-  read: "✓✓",
-  failed: "!",
+/** Сообщения от одного автора в пределах этого времени склеиваются в группу. */
+const GROUP_WINDOW_MS = 2 * 60 * 1000;
+
+const STATUS_ICONS: Record<LocalMessage["status"], IconName> = {
+  pending: "clock",
+  sent: "check",
+  delivered: "checkDouble",
+  read: "checkDouble",
+  failed: "alert",
 };
 
 function formatTime(ts: number): string {
@@ -46,42 +49,117 @@ function formatTime(ts: number): string {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function formatDay(ts: number): string {
+  const date = new Date(ts);
+  const now = new Date();
+  const sameDay = (a: Date, b: Date): boolean =>
+    a.getDate() === b.getDate() && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
+  if (sameDay(date, now)) return "сегодня";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(date, yesterday)) return "вчера";
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+  }
+  return date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+}
+
+function isSameDay(a: number, b: number): boolean {
+  const x = new Date(a);
+  const y = new Date(b);
+  return x.getDate() === y.getDate() && x.getMonth() === y.getMonth() && x.getFullYear() === y.getFullYear();
+}
+
+/** Что показать перед сообщением и насколько плотно прижать его к предыдущему. */
+interface Decorated {
+  message: LocalMessage;
+  showDay: boolean;
+  /** Последнее в группе — только у него скруглённый «хвостик». */
+  tail: boolean;
+  /** Первое в группе — над ним больший отступ. */
+  groupStart: boolean;
+}
+
+function decorate(messages: LocalMessage[]): Decorated[] {
+  return messages.map((message, index) => {
+    const prev = index > 0 ? messages[index - 1] : undefined;
+    const next = index + 1 < messages.length ? messages[index + 1] : undefined;
+    const groupedWithPrev =
+      prev !== undefined &&
+      prev.fromUserId === message.fromUserId &&
+      message.createdAt - prev.createdAt < GROUP_WINDOW_MS &&
+      isSameDay(prev.createdAt, message.createdAt);
+    const groupedWithNext =
+      next !== undefined &&
+      next.fromUserId === message.fromUserId &&
+      next.createdAt - message.createdAt < GROUP_WINDOW_MS &&
+      isSameDay(next.createdAt, message.createdAt);
+
+    return {
+      message,
+      showDay: prev === undefined || !isSameDay(prev.createdAt, message.createdAt),
+      tail: !groupedWithNext,
+      groupStart: !groupedWithPrev,
+    };
+  });
+}
+
 function VoiceBubble({
   localUri,
   durationMs,
   tint,
+  trackColor,
 }: {
   localUri: string;
   durationMs?: number | undefined;
   tint: string;
+  trackColor: string;
 }): React.ReactElement {
   const player = useAudioPlayer(localUri);
   const status = useAudioPlayerStatus(player);
   const totalSec = Math.round(status.duration || (durationMs ?? 0) / 1000 || 0);
   const currentSec = Math.round(status.currentTime || 0);
+  const progress = totalSec > 0 ? Math.min(1, currentSec / totalSec) : 0;
 
   return (
-    <Pressable style={styles.voiceRow} onPress={() => (status.playing ? player.pause() : player.play())}>
-      <Text style={[styles.voiceIcon, { color: tint }]}>{status.playing ? "❚❚" : "▶"}</Text>
-      <Text style={[styles.voiceTime, { color: tint }]}>
-        {currentSec > 0 ? `${currentSec} / ` : ""}
-        {totalSec} с
-      </Text>
-    </Pressable>
+    <View style={styles.voiceRow}>
+      <Pressable
+        onPress={() => (status.playing ? player.pause() : player.play())}
+        hitSlop={8}
+        style={[styles.voiceButton, { borderColor: tint }]}
+      >
+        <Icon name={status.playing ? "pause" : "play"} size={15} color={tint} />
+      </Pressable>
+      <View style={styles.voiceMeter}>
+        <View style={[styles.voiceTrack, { backgroundColor: trackColor }]}>
+          <View style={[styles.voiceFill, { backgroundColor: tint, width: `${progress * 100}%` }]} />
+        </View>
+        <Text style={[styles.voiceTime, { color: tint }]}>
+          {currentSec > 0 ? `${formatSeconds(currentSec)} / ` : ""}
+          {formatSeconds(totalSec)}
+        </Text>
+      </View>
+    </View>
   );
+}
+
+function formatSeconds(total: number): string {
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function MessageContent({
   item,
   textColor,
-  theme,
+  metaColor,
 }: {
   item: LocalMessage;
   textColor: string;
-  theme: Theme;
+  metaColor: string;
 }): React.ReactElement {
   if (item.deletedAt) {
-    return <Text style={[styles.deletedText, { color: theme.colors.textMuted }]}>Сообщение удалено</Text>;
+    return <Text style={[styles.deletedText, { color: metaColor }]}>Сообщение удалено</Text>;
   }
 
   if (item.contentType === "image") {
@@ -93,7 +171,9 @@ function MessageContent({
   if (item.contentType === "voice") {
     const meta = parseLocalMediaMeta(item.plaintext);
     if (!meta) return <Text style={[styles.bubbleText, { color: textColor }]}>Голосовое недоступно</Text>;
-    return <VoiceBubble localUri={meta.localUri} durationMs={meta.durationMs} tint={textColor} />;
+    return (
+      <VoiceBubble localUri={meta.localUri} durationMs={meta.durationMs} tint={textColor} trackColor={metaColor} />
+    );
   }
 
   if (item.contentType === "file") {
@@ -101,12 +181,14 @@ function MessageContent({
     if (!meta) return <Text style={[styles.bubbleText, { color: textColor }]}>Файл недоступен</Text>;
     return (
       <View style={styles.fileRow}>
-        <Text style={[styles.fileIcon, { color: textColor }]}>📄</Text>
+        <View style={[styles.fileIconCircle, { borderColor: metaColor }]}>
+          <Icon name="file" size={19} color={textColor} />
+        </View>
         <View style={styles.fileInfo}>
           <Text style={[styles.fileName, { color: textColor }]} numberOfLines={1}>
             {meta.fileName ?? "файл"}
           </Text>
-          <Text style={[styles.fileSize, { color: textColor, opacity: 0.7 }]}>{formatFileSize(meta.sizeBytes)}</Text>
+          <Text style={[styles.fileSize, { color: metaColor }]}>{formatFileSize(meta.sizeBytes)}</Text>
         </View>
       </View>
     );
@@ -118,8 +200,11 @@ function MessageContent({
       if (typeof lat !== "number" || typeof lng !== "number") throw new Error("bad payload");
       return (
         <Pressable onPress={() => void Linking.openURL(`https://maps.google.com/?q=${lat},${lng}`)}>
-          <Text style={[styles.bubbleText, { color: textColor }]}>📍 Я тут</Text>
-          <Text style={[styles.locationCoords, { color: textColor, opacity: 0.75 }]}>
+          <View style={styles.locationRow}>
+            <Icon name="pin" size={18} color={textColor} />
+            <Text style={[styles.bubbleText, { color: textColor }]}>Я тут</Text>
+          </View>
+          <Text style={[styles.locationCoords, { color: metaColor }]}>
             {lat.toFixed(5)}, {lng.toFixed(5)} — открыть карту
           </Text>
         </Pressable>
@@ -130,7 +215,7 @@ function MessageContent({
   }
 
   return (
-    <Text style={[styles.bubbleText, { color: textColor }]}>
+    <Text style={[styles.bubbleText, { color: item.plaintext === null ? metaColor : textColor }]}>
       {item.plaintext ?? "Не удалось расшифровать сообщение"}
     </Text>
   );
@@ -157,7 +242,7 @@ export function ChatScreen({
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
-  const listRef = useRef<FlatList<LocalMessage>>(null);
+  const listRef = useRef<FlatList<Decorated>>(null);
   const typingStopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesByIdRef = useRef<Map<string, LocalMessage>>(new Map());
 
@@ -165,6 +250,7 @@ export function ChatScreen({
   const recorderState = useAudioRecorderState(recorder);
 
   const contact = contacts.find((c) => c.userId === peerUserId);
+  const decorated = useMemo(() => decorate(messages), [messages]);
 
   useEffect(() => {
     let mounted = true;
@@ -318,6 +404,8 @@ export function ChatScreen({
     );
   }
 
+  const hasDraft = draft.trim().length > 0;
+
   return (
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: theme.colors.background }]}
@@ -326,106 +414,154 @@ export function ChatScreen({
       behavior="padding"
       keyboardVerticalOffset={0}
     >
+      <Wallpaper />
+
       <Header
+        align="left"
         title={title}
-        subtitle={peerTyping ? "печатает…" : undefined}
+        subtitle={peerTyping ? "печатает…" : contact ? `отпечаток ${contact.fingerprint.slice(0, 9)}…` : undefined}
+        subtitleColor={peerTyping ? theme.colors.accent : theme.colors.textMuted}
         onBack={onBack}
-        right={<Avatar name={title} seed={peerUserId} size={34} />}
+        avatar={<Avatar name={title} seed={peerUserId} size={38} />}
       />
 
       <FlatList
         ref={listRef}
-        data={messages}
-        keyExtractor={(m) => m.id}
-        contentContainerStyle={messages.length === 0 ? styles.emptyContainer : styles.list}
+        data={decorated}
+        keyExtractor={(row) => row.message.id}
+        contentContainerStyle={decorated.length === 0 ? styles.emptyContainer : styles.list}
         renderItem={({ item }) => {
-          const mine = item.fromUserId === identity.userId;
+          const { message, showDay, tail, groupStart } = item;
+          const mine = message.fromUserId === identity.userId;
           const textColor = mine ? theme.colors.bubbleMineText : theme.colors.bubbleTheirsText;
-          const repliedMessage = item.replyTo ? messagesByIdRef.current.get(item.replyTo) : undefined;
+          const metaColor = mine ? theme.colors.bubbleMineMeta : theme.colors.bubbleTheirsMeta;
+          const repliedMessage = message.replyTo ? messagesByIdRef.current.get(message.replyTo) : undefined;
+          const isImage = message.contentType === "image" && !message.deletedAt;
+
           return (
-            <Pressable
-              style={[
-                styles.bubble,
-                mine ? styles.bubbleMine : styles.bubbleTheirs,
-                {
-                  backgroundColor: mine ? theme.colors.bubbleMine : theme.colors.bubbleTheirs,
-                  borderColor: theme.colors.border,
-                },
-              ]}
-              onLongPress={() => handleLongPress(item)}
-            >
-              {repliedMessage && (
-                <View style={[styles.replyQuote, { borderLeftColor: textColor }]}>
-                  <Text style={[styles.replyQuoteAuthor, { color: textColor }]}>
-                    {displayNameFor(repliedMessage.fromUserId)}
-                  </Text>
-                  <Text style={[styles.replyQuoteText, { color: textColor, opacity: 0.8 }]} numberOfLines={1}>
-                    {repliedMessage.contentType === "text" ? (repliedMessage.plaintext ?? "") : "Вложение"}
-                  </Text>
+            <View>
+              {showDay && (
+                <View style={styles.dayWrap}>
+                  <View style={[styles.dayChip, { backgroundColor: theme.colors.dateChip }]}>
+                    <Text style={[styles.dayText, { color: theme.colors.dateChipText }]}>
+                      {formatDay(message.createdAt)}
+                    </Text>
+                  </View>
                 </View>
               )}
-              <MessageContent item={item} textColor={textColor} theme={theme} />
-              <View style={styles.metaRow}>
-                <Text style={[styles.time, { color: textColor, opacity: 0.65 }]}>{formatTime(item.createdAt)}</Text>
-                {mine && !item.deletedAt && (
-                  <Text
+
+              <Pressable
+                style={[
+                  styles.bubble,
+                  mine ? styles.bubbleMine : styles.bubbleTheirs,
+                  // Хвостик только у последнего сообщения в группе — так серия
+                  // сообщений читается одним блоком, как в мессенджерах.
+                  tail && (mine ? styles.tailMine : styles.tailTheirs),
+                  isImage && styles.bubbleImage,
+                  {
+                    backgroundColor: mine ? theme.colors.bubbleMine : theme.colors.bubbleTheirs,
+                    borderColor: theme.colors.border,
+                    marginTop: groupStart ? 8 : 2,
+                    shadowColor: theme.colors.shadow,
+                  },
+                ]}
+                onLongPress={() => handleLongPress(message)}
+              >
+                {repliedMessage && (
+                  <View
                     style={[
-                      styles.status,
-                      { color: item.status === "read" ? theme.colors.success : textColor, opacity: 0.8 },
+                      styles.replyQuote,
+                      {
+                        borderLeftColor: mine ? theme.colors.bubbleMineText : theme.colors.accent,
+                        backgroundColor: mine ? "rgba(255,255,255,0.14)" : theme.colors.accentSoft,
+                      },
                     ]}
                   >
-                    {STATUS_LABELS[item.status] ?? ""}
-                  </Text>
+                    <Text
+                      style={[styles.replyQuoteAuthor, { color: mine ? theme.colors.bubbleMineText : theme.colors.accent }]}
+                    >
+                      {displayNameFor(repliedMessage.fromUserId)}
+                    </Text>
+                    <Text style={[styles.replyQuoteText, { color: mine ? theme.colors.bubbleMineText : theme.colors.textSecondary }]} numberOfLines={1}>
+                      {repliedMessage.contentType === "text" ? (repliedMessage.plaintext ?? "") : "Вложение"}
+                    </Text>
+                  </View>
                 )}
-              </View>
-            </Pressable>
+
+                <MessageContent item={message} textColor={textColor} metaColor={metaColor} />
+
+                <View style={[styles.metaRow, isImage && styles.metaRowOnImage]}>
+                  <Text style={[styles.time, { color: metaColor }]}>{formatTime(message.createdAt)}</Text>
+                  {mine && !message.deletedAt && (
+                    <Icon
+                      name={STATUS_ICONS[message.status]}
+                      size={15}
+                      color={message.status === "read" ? theme.colors.readTick : metaColor}
+                    />
+                  )}
+                </View>
+              </Pressable>
+            </View>
           );
         }}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Avatar name={title} seed={peerUserId} size={72} />
+            <Avatar name={title} seed={peerUserId} size={84} />
             <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}>{title}</Text>
-            {contact && (
-              <Text style={[styles.emptyFingerprint, { color: theme.colors.textMuted }]}>
-                Отпечаток ключа: {contact.fingerprint}
+            <View style={[styles.emptyCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+              <View style={styles.emptyCardHead}>
+                <Icon name="shield" size={18} color={theme.colors.accent} />
+                <Text style={[styles.emptyCardTitle, { color: theme.colors.textPrimary }]}>Сквозное шифрование</Text>
+              </View>
+              <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                Сообщения шифруются на устройстве — сервер видит только зашифрованные блобы.
               </Text>
-            )}
-            <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-              Сообщений пока нет. Всё, что вы отправите, шифруется на устройстве.
-            </Text>
+              {contact && (
+                <Text style={[styles.emptyFingerprint, { color: theme.colors.textMuted }]}>
+                  Отпечаток ключа: {contact.fingerprint}
+                </Text>
+              )}
+            </View>
           </View>
         }
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
       />
 
       {replyingTo && (
-        <View
-          style={[styles.replyBar, { backgroundColor: theme.colors.accentSoft, borderTopColor: theme.colors.border }]}
-        >
+        <View style={[styles.replyBar, { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.divider }]}>
+          <Icon name="reply" size={19} color={theme.colors.accent} />
           <View style={styles.replyBarText}>
             <Text style={[styles.replyBarAuthor, { color: theme.colors.accent }]}>
-              Ответ {displayNameFor(replyingTo.fromUserId)}
+              {displayNameFor(replyingTo.fromUserId)}
             </Text>
             <Text style={[styles.replyBarPreview, { color: theme.colors.textSecondary }]} numberOfLines={1}>
               {replyingTo.contentType === "text" ? (replyingTo.plaintext ?? "") : "Вложение"}
             </Text>
           </View>
-          <Pressable onPress={() => setReplyingTo(null)} hitSlop={10}>
-            <Text style={[styles.replyBarClose, { color: theme.colors.textMuted }]}>✕</Text>
+          <Pressable onPress={() => setReplyingTo(null)} hitSlop={10} style={styles.replyBarClose}>
+            <Icon name="close" size={18} color={theme.colors.textMuted} />
           </Pressable>
         </View>
       )}
 
       {attachOpen && (
-        <View style={[styles.attachSheet, { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.border }]}>
-          {[
-            { icon: "🖼", label: "Фото", onPress: handlePickImage },
-            { icon: "📄", label: "Файл", onPress: handlePickFile },
-            { icon: "📍", label: "Я тут", onPress: handleShareLocation },
-          ].map((action) => (
-            <Pressable key={action.label} style={styles.attachAction} onPress={() => void action.onPress()}>
+        <View
+          style={[styles.attachSheet, { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.divider }]}
+        >
+          {(
+            [
+              { icon: "image", label: "Фото", onPress: handlePickImage },
+              { icon: "file", label: "Файл", onPress: handlePickFile },
+              { icon: "pin", label: "Я тут", onPress: handleShareLocation },
+            ] as const
+          ).map((action) => (
+            <Pressable
+              key={action.label}
+              style={({ pressed }) => [styles.attachAction, { opacity: pressed ? 0.6 : 1 }]}
+              onPress={() => void action.onPress()}
+            >
               <View style={[styles.attachIconCircle, { backgroundColor: theme.colors.accentSoft }]}>
-                <Text style={styles.attachIcon}>{action.icon}</Text>
+                <Icon name={action.icon} size={24} color={theme.colors.accent} />
               </View>
               <Text style={[styles.attachLabel, { color: theme.colors.textSecondary }]}>{action.label}</Text>
             </Pressable>
@@ -440,49 +576,58 @@ export function ChatScreen({
             // Нижние кнопки навигации перекрывали строку ввода — добавляем инсет.
             // Под открытой клавиатурой инсет не нужен: её высота уже включает
             // область навигации, иначе снизу оставалась бы пустая полоса.
-            paddingBottom: 9 + (keyboardVisible ? 0 : insets.bottom),
+            paddingBottom: 8 + (keyboardVisible ? 0 : insets.bottom),
             backgroundColor: theme.colors.surface,
-            borderTopColor: theme.colors.border,
+            borderTopColor: theme.colors.divider,
           },
         ]}
       >
-        <Pressable onPress={() => setAttachOpen((open) => !open)} hitSlop={10} style={styles.plusButton}>
-          <Text style={[styles.plusIcon, { color: attachOpen ? theme.colors.accent : theme.colors.textSecondary }]}>
-            {attachOpen ? "✕" : "＋"}
-          </Text>
-        </Pressable>
-        <TextInput
+        <View
           style={[
-            styles.input,
-            {
-              backgroundColor: theme.colors.background,
-              borderColor: theme.colors.border,
-              color: theme.colors.textPrimary,
-            },
+            styles.inputPill,
+            { backgroundColor: theme.colors.background, borderColor: theme.colors.border },
           ]}
-          value={draft}
-          onChangeText={handleDraftChange}
-          placeholder={recorderState.isRecording ? "Записываю…" : "Сообщение"}
-          placeholderTextColor={theme.colors.textMuted}
-          multiline
-        />
-        {draft.trim() ? (
+        >
+          <Pressable onPress={() => setAttachOpen((open) => !open)} hitSlop={8} style={styles.attachButton}>
+            <Icon
+              name={attachOpen ? "close" : "plus"}
+              size={22}
+              color={attachOpen ? theme.colors.accent : theme.colors.textMuted}
+            />
+          </Pressable>
+          <TextInput
+            style={[styles.input, { color: theme.colors.textPrimary }]}
+            value={draft}
+            onChangeText={handleDraftChange}
+            placeholder={recorderState.isRecording ? "Записываю…" : "Сообщение"}
+            placeholderTextColor={theme.colors.textMuted}
+            multiline
+          />
+        </View>
+
+        {hasDraft ? (
           <Pressable
-            style={[styles.sendButton, { backgroundColor: theme.colors.accent }]}
+            style={({ pressed }) => [
+              styles.sendButton,
+              { backgroundColor: theme.colors.accent, transform: [{ scale: pressed ? 0.92 : 1 }] },
+            ]}
             onPress={() => void handleSend()}
           >
-            <Text style={[styles.sendIcon, { color: theme.colors.onAccent }]}>↑</Text>
+            <Icon name="send" size={21} color={theme.colors.onAccent} />
           </Pressable>
         ) : (
           <Pressable
             style={[
               styles.sendButton,
-              { backgroundColor: recorderState.isRecording ? theme.colors.danger : theme.colors.accent },
+              {
+                backgroundColor: recorderState.isRecording ? theme.colors.danger : theme.colors.accent,
+                transform: [{ scale: recorderState.isRecording ? 1.08 : 1 }],
+              },
             ]}
             onPressIn={() => void handleStartRecording()}
             onPressOut={() => void handleStopRecording()}
           >
-            <Text style={[styles.sendIcon, { color: theme.colors.onAccent }]}>🎤</Text>
+            <Icon name="mic" size={21} color={theme.colors.onAccent} />
           </Pressable>
         )}
       </View>
@@ -492,74 +637,119 @@ export function ChatScreen({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  list: { padding: 12, paddingBottom: 16 },
-  emptyContainer: { flexGrow: 1, justifyContent: "center", padding: 32 },
+  list: { paddingHorizontal: 10, paddingTop: 6, paddingBottom: 12 },
+  emptyContainer: { flexGrow: 1, justifyContent: "center", padding: 28 },
+  dayWrap: { alignItems: "center", marginVertical: 12 },
+  dayChip: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12 },
+  dayText: { fontSize: 12, fontWeight: "600" },
   bubble: {
-    maxWidth: "82%",
-    borderRadius: 18,
-    paddingHorizontal: 12,
+    maxWidth: "80%",
+    borderRadius: 20,
+    paddingHorizontal: 13,
     paddingTop: 8,
     paddingBottom: 6,
-    marginVertical: 3,
+    elevation: 1,
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
   },
-  bubbleMine: { alignSelf: "flex-end", borderBottomRightRadius: 6 },
-  bubbleTheirs: { alignSelf: "flex-start", borderBottomLeftRadius: 6, borderWidth: StyleSheet.hairlineWidth },
-  bubbleText: { fontSize: 16, lineHeight: 21 },
+  bubbleMine: { alignSelf: "flex-end" },
+  bubbleTheirs: { alignSelf: "flex-start", borderWidth: StyleSheet.hairlineWidth },
+  tailMine: { borderBottomRightRadius: 7 },
+  tailTheirs: { borderBottomLeftRadius: 7 },
+  // У фото отступы убираем: картинка занимает пузырь целиком.
+  bubbleImage: { paddingHorizontal: 3, paddingTop: 3, paddingBottom: 3, overflow: "hidden" },
+  bubbleText: { fontSize: 16, lineHeight: 21.5 },
   deletedText: { fontSize: 15, fontStyle: "italic" },
-  metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 5, marginTop: 3 },
-  time: { fontSize: 11 },
-  status: { fontSize: 11, fontWeight: "600" },
-  image: { width: 232, height: 232, borderRadius: 12, marginBottom: 2 },
-  fileRow: { flexDirection: "row", alignItems: "center", gap: 10, minWidth: 180 },
-  fileIcon: { fontSize: 26 },
+  metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 4, marginTop: 3 },
+  metaRowOnImage: {
+    position: "absolute",
+    right: 10,
+    bottom: 9,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.42)",
+  },
+  time: { fontSize: 11.5 },
+  image: { width: 238, height: 238, borderRadius: 17 },
+  fileRow: { flexDirection: "row", alignItems: "center", gap: 11, minWidth: 190, paddingVertical: 2 },
+  fileIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   fileInfo: { flex: 1 },
   fileName: { fontSize: 15, fontWeight: "600" },
   fileSize: { fontSize: 12, marginTop: 2 },
-  locationCoords: { fontSize: 12, marginTop: 3 },
-  voiceRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 4, minWidth: 130 },
-  voiceIcon: { fontSize: 15 },
-  voiceTime: { fontSize: 14, fontWeight: "500" },
-  replyQuote: { borderLeftWidth: 3, paddingLeft: 8, marginBottom: 6, opacity: 0.9 },
-  replyQuoteAuthor: { fontSize: 12, fontWeight: "700" },
-  replyQuoteText: { fontSize: 13, marginTop: 1 },
-  empty: { alignItems: "center", gap: 10 },
-  emptyTitle: { fontSize: 20, fontWeight: "700", marginTop: 6 },
-  emptyFingerprint: { fontSize: 11, letterSpacing: 0.5 },
-  emptyText: { fontSize: 14, textAlign: "center", lineHeight: 20, marginTop: 4 },
-  replyBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 9, borderTopWidth: StyleSheet.hairlineWidth },
+  locationRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  locationCoords: { fontSize: 12, marginTop: 4 },
+  voiceRow: { flexDirection: "row", alignItems: "center", gap: 11, minWidth: 168, paddingVertical: 2 },
+  voiceButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1.4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  voiceMeter: { flex: 1, gap: 5 },
+  voiceTrack: { height: 3, borderRadius: 2, overflow: "hidden" },
+  voiceFill: { height: 3, borderRadius: 2 },
+  voiceTime: { fontSize: 12 },
+  replyQuote: { borderLeftWidth: 3, paddingLeft: 8, paddingRight: 8, paddingVertical: 5, marginBottom: 6, borderRadius: 7 },
+  replyQuoteAuthor: { fontSize: 12.5, fontWeight: "700" },
+  replyQuoteText: { fontSize: 13, marginTop: 1, opacity: 0.85 },
+  empty: { alignItems: "center" },
+  emptyTitle: { fontSize: 21, fontWeight: "700", marginTop: 14, letterSpacing: -0.3 },
+  emptyCard: { marginTop: 20, borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, padding: 16 },
+  emptyCardHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  emptyCardTitle: { fontSize: 15, fontWeight: "600" },
+  emptyText: { fontSize: 14, lineHeight: 20 },
+  emptyFingerprint: { fontSize: 11.5, letterSpacing: 0.4, marginTop: 10 },
+  replyBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
   replyBarText: { flex: 1 },
-  replyBarAuthor: { fontSize: 12, fontWeight: "700" },
+  replyBarAuthor: { fontSize: 12.5, fontWeight: "700" },
   replyBarPreview: { fontSize: 13, marginTop: 1 },
-  replyBarClose: { fontSize: 16, paddingHorizontal: 8 },
+  replyBarClose: { paddingHorizontal: 4 },
   attachSheet: {
     flexDirection: "row",
     justifyContent: "space-around",
     paddingVertical: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  attachAction: { alignItems: "center", gap: 7 },
-  attachIconCircle: { width: 52, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center" },
-  attachIcon: { fontSize: 24 },
-  attachLabel: { fontSize: 12 },
+  attachAction: { alignItems: "center", gap: 8 },
+  attachIconCircle: { width: 54, height: 54, borderRadius: 27, alignItems: "center", justifyContent: "center" },
+  attachLabel: { fontSize: 12.5 },
   inputRow: {
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 8,
     paddingHorizontal: 10,
-    paddingTop: 9,
+    paddingTop: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  plusButton: { width: 38, height: 42, alignItems: "center", justifyContent: "center" },
-  plusIcon: { fontSize: 24 },
-  input: {
+  inputPill: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "flex-end",
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    maxHeight: 120,
-    fontSize: 16,
+    borderRadius: 22,
+    paddingLeft: 4,
+    paddingRight: 12,
+    minHeight: 44,
   },
-  sendButton: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
-  sendIcon: { fontSize: 19, fontWeight: "700" },
+  attachButton: { width: 38, height: 42, alignItems: "center", justifyContent: "center" },
+  input: { flex: 1, paddingTop: 11, paddingBottom: 11, maxHeight: 120, fontSize: 16, lineHeight: 21 },
+  sendButton: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
 });
