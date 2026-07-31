@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { dmChatId } from "../chat/chatId";
 import { describeFailure, useApp } from "../context/AppContext";
-import { countUnreadForChat, getLastMessageForChat, type LocalMessage } from "../db/messages";
+import { listLastMessages, listUnreadCounts, type LocalMessage } from "../db/messages";
 import { useTheme } from "../theme/ThemeContext";
+import type { Theme } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
 import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
@@ -67,6 +68,68 @@ function formatStamp(ts: number): string {
   return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" });
 }
 
+/** Строка чата. Мемо + простые пропсы: список не перерисовывается целиком. */
+const ChatRowView = React.memo(function ChatRowView({
+  row,
+  theme,
+  onPress,
+}: {
+  row: ChatRow;
+  theme: Theme;
+  onPress: (row: ChatRow) => void;
+}): React.ReactElement {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? theme.colors.surfacePressed : "transparent" }]}
+      onPress={() => onPress(row)}
+    >
+      <Avatar name={row.title} seed={row.userId} size={54} />
+
+      <View style={styles.rowText}>
+        <View style={styles.rowTopLine}>
+          <Text style={[styles.rowTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
+            {row.title}
+          </Text>
+          <Text style={[styles.rowStamp, { color: theme.colors.textMuted }]}>{formatStamp(row.ts)}</Text>
+        </View>
+
+        <View style={styles.rowBottomLine}>
+          {row.outgoingStatus && (
+            <View style={styles.previewTick}>
+              <Icon
+                name={
+                  row.outgoingStatus === "pending"
+                    ? "clock"
+                    : row.outgoingStatus === "sent"
+                      ? "check"
+                      : "checkDouble"
+                }
+                size={15}
+                color={row.outgoingStatus === "read" ? theme.colors.accent : theme.colors.textMuted}
+              />
+            </View>
+          )}
+          {row.previewIcon && (
+            <View style={styles.previewIcon}>
+              <Icon name={row.previewIcon} size={15} color={theme.colors.textMuted} />
+            </View>
+          )}
+          <Text style={[styles.rowPreview, { color: theme.colors.textSecondary }]} numberOfLines={1}>
+            {row.preview}
+          </Text>
+          {row.unread > 0 && (
+            <View style={[styles.badge, { backgroundColor: theme.colors.accent }]}>
+              <Text style={[styles.badgeText, { color: theme.colors.onAccent }]}>
+                {row.unread > 99 ? "99+" : row.unread}
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </Pressable>
+  );
+});
+
 export function ChatListScreen({
   onOpenChat,
   onOpenSettings,
@@ -82,39 +145,69 @@ export function ChatListScreen({
   const [rows, setRows] = useState<ChatRow[]>([]);
 
   const refresh = useCallback(async () => {
-    const contactRows = await Promise.all(
-      contacts
-        .filter((c) => !c.isRevoked)
-        .map(async (contact) => {
-          const chatId = dmChatId(identity.userId, contact.userId);
-          const last = await getLastMessageForChat(chatId);
-          const preview = previewOf(last);
-          return {
-            chatId,
-            userId: contact.userId,
-            title: contact.displayName,
-            preview: preview.text,
-            previewIcon: preview.icon,
-            ts: last?.createdAt ?? 0,
-            unread: await countUnreadForChat(chatId, identity.userId),
-            outgoingStatus: last && last.fromUserId === identity.userId && !last.deletedAt ? last.status : null,
-          };
-        }),
-    );
+    // Два запроса на весь список вместо двух на каждый чат: при десяти
+    // участниках это было двадцать обращений к sqlite на каждое событие.
+    const [lastMessages, unreadCounts] = await Promise.all([listLastMessages(), listUnreadCounts(identity.userId)]);
+
+    const contactRows = contacts
+      .filter((c) => !c.isRevoked)
+      .map((contact) => {
+        const chatId = dmChatId(identity.userId, contact.userId);
+        const last = lastMessages.get(chatId) ?? null;
+        const preview = previewOf(last);
+        return {
+          chatId,
+          userId: contact.userId,
+          title: contact.displayName,
+          preview: preview.text,
+          previewIcon: preview.icon,
+          ts: last?.createdAt ?? 0,
+          unread: unreadCounts.get(chatId) ?? 0,
+          outgoingStatus: last && last.fromUserId === identity.userId && !last.deletedAt ? last.status : null,
+        };
+      });
     setRows(contactRows.sort((a, b) => b.ts - a.ts));
   }, [contacts, identity.userId]);
 
+  // Разбор страницы истории или серия квитанций дают события пачкой. Склеиваем
+  // их в одно обновление на следующий тик, иначе список перечитывался бы
+  // столько раз, сколько пришло сообщений.
+  const pendingRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRefresh = useCallback(() => {
+    if (pendingRefresh.current) return;
+    pendingRefresh.current = setTimeout(() => {
+      pendingRefresh.current = null;
+      void refresh();
+    }, 80);
+  }, [refresh]);
+
   useEffect(() => {
     void refresh();
-    const offInserted = chatEvents.on("messageInserted", () => void refresh());
-    const offStatus = chatEvents.on("messageStatusChanged", () => void refresh());
+    const offInserted = chatEvents.on("messageInserted", scheduleRefresh);
+    const offStatus = chatEvents.on("messageStatusChanged", scheduleRefresh);
     return () => {
       offInserted();
       offStatus();
+      if (pendingRefresh.current) clearTimeout(pendingRefresh.current);
     };
-  }, [refresh, chatEvents]);
+  }, [refresh, scheduleRefresh, chatEvents]);
 
   const connected = connectionState === "connected";
+
+  const handleRowPress = useCallback(
+    (row: ChatRow) => onOpenChat(row.chatId, row.title, row.userId),
+    [onOpenChat],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: ChatRow }) => <ChatRowView row={item} theme={theme} onPress={handleRowPress} />,
+    [handleRowPress, theme],
+  );
+
+  const Separator = useCallback(
+    () => <View style={[styles.separator, { backgroundColor: theme.colors.divider }]} />,
+    [theme],
+  );
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -143,62 +236,14 @@ export function ChatListScreen({
 
       <FlatList
         data={rows}
-        keyExtractor={(row) => row.chatId}
+        keyExtractor={keyExtractor}
         contentContainerStyle={[
           rows.length === 0 ? styles.emptyContainer : styles.list,
           // Кнопка «+» и панель навигации не должны перекрывать последний чат.
           { paddingBottom: insets.bottom + 96 },
         ]}
-        ItemSeparatorComponent={() => (
-          <View style={[styles.separator, { backgroundColor: theme.colors.divider }]} />
-        )}
-        renderItem={({ item }) => (
-          <Pressable
-            style={({ pressed }) => [
-              styles.row,
-              { backgroundColor: pressed ? theme.colors.surfacePressed : "transparent" },
-            ]}
-            onPress={() => onOpenChat(item.chatId, item.title, item.userId)}
-          >
-            <Avatar name={item.title} seed={item.userId} size={54} />
-
-            <View style={styles.rowText}>
-              <View style={styles.rowTopLine}>
-                <Text style={[styles.rowTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-                  {item.title}
-                </Text>
-                <Text style={[styles.rowStamp, { color: theme.colors.textMuted }]}>{formatStamp(item.ts)}</Text>
-              </View>
-
-              <View style={styles.rowBottomLine}>
-                {item.outgoingStatus && (
-                  <View style={styles.previewTick}>
-                    <Icon
-                      name={item.outgoingStatus === "pending" ? "clock" : item.outgoingStatus === "sent" ? "check" : "checkDouble"}
-                      size={15}
-                      color={item.outgoingStatus === "read" ? theme.colors.accent : theme.colors.textMuted}
-                    />
-                  </View>
-                )}
-                {item.previewIcon && (
-                  <View style={styles.previewIcon}>
-                    <Icon name={item.previewIcon} size={15} color={theme.colors.textMuted} />
-                  </View>
-                )}
-                <Text style={[styles.rowPreview, { color: theme.colors.textSecondary }]} numberOfLines={1}>
-                  {item.preview}
-                </Text>
-                {item.unread > 0 && (
-                  <View style={[styles.badge, { backgroundColor: theme.colors.accent }]}>
-                    <Text style={[styles.badgeText, { color: theme.colors.onAccent }]}>
-                      {item.unread > 99 ? "99+" : item.unread}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </View>
-          </Pressable>
-        )}
+        ItemSeparatorComponent={Separator}
+        renderItem={renderItem}
         ListEmptyComponent={
           <View style={styles.empty}>
             <View style={[styles.emptyIcon, { backgroundColor: theme.colors.accentSoft }]}>
@@ -237,6 +282,10 @@ export function ChatListScreen({
       </Pressable>
     </View>
   );
+}
+
+function keyExtractor(row: ChatRow): string {
+  return row.chatId;
 }
 
 const styles = StyleSheet.create({

@@ -136,7 +136,17 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           send(socket, envelope("error", { code: result.code, message: "Сообщение не принято" }));
           return;
         }
-        send(socket, envelope("msg.accepted", { clientMsgId: payload.clientMsgId, msgId: result.message.msgId }));
+        send(
+          socket,
+          envelope("msg.accepted", {
+            clientMsgId: payload.clientMsgId,
+            msgId: result.message.msgId,
+            chatId: payload.chatId,
+          }),
+        );
+        // Повтор уже принятого сообщения подтверждаем, но не рассылаем заново,
+        // иначе у получателя оно продублировалось бы после каждого реконнекта.
+        if (result.duplicate) return;
         for (const recipientDeviceId of recipientDeviceIds(payload.chatId, userId)) {
           sendToDevice(recipientDeviceId, envelope("msg.deliver", result.message));
         }

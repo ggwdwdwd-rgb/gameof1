@@ -1,4 +1,11 @@
 import { getDb } from "./database";
+import {
+  MARK_CHAT_READ,
+  SELECT_CHAT_UNREAD,
+  SELECT_LAST_MESSAGES,
+  SELECT_UNREAD_COUNTS,
+  UPDATE_STATUS_MONOTONIC,
+} from "./sql";
 
 export type MessageStatus = "pending" | "sent" | "delivered" | "read" | "failed";
 
@@ -64,9 +71,14 @@ export async function insertMessage(message: LocalMessage): Promise<void> {
   );
 }
 
-export async function updateMessageStatus(clientMsgId: string, status: MessageStatus): Promise<void> {
+/** Порядок «взросления» статуса: назад он не откатывается. */
+const STATUS_RANK: Record<MessageStatus, number> = { failed: 0, pending: 1, sent: 2, delivered: 3, read: 4 };
+
+/** true, если статус действительно изменился (см. UPDATE_STATUS_MONOTONIC). */
+export async function updateMessageStatus(clientMsgId: string, status: MessageStatus): Promise<boolean> {
   const db = await getDb();
-  await db.runAsync("UPDATE messages SET status = ? WHERE client_msg_id = ?", [status, clientMsgId]);
+  const result = await db.runAsync(UPDATE_STATUS_MONOTONIC, [status, clientMsgId, STATUS_RANK[status]]);
+  return result.changes > 0;
 }
 
 export async function listMessagesForChat(chatId: string, limit = 200): Promise<LocalMessage[]> {
@@ -88,18 +100,35 @@ export async function getLastMessageForChat(chatId: string): Promise<LocalMessag
 }
 
 /**
- * Непрочитанные — входящие сообщения, до которых пользователь ещё не доходил.
- * Статус "read" ставится при открытии чата, поэтому всё, что осталось
- * "delivered" от собеседника, и есть непрочитанное.
+ * Помечает входящие в чате прочитанными и возвращает id тех, что реально
+ * изменились — их и надо подтвердить серверу.
+ *
+ * Раньше экран чата на каждое обновление проходил по всем сообщениям и звал
+ * markRead для каждого «доставленного». Локальный статус при этом не менялся,
+ * поэтому квитанции «прочитано» уходили заново при каждом событии — и каждая
+ * из них вызывала у собеседника новое событие, то есть новое обновление.
+ * Отсюда и были подлагивания.
  */
-export async function countUnreadForChat(chatId: string, myUserId: string): Promise<number> {
+export async function markChatRead(chatId: string, myUserId: string): Promise<string[]> {
   const db = await getDb();
-  const row = await db.getFirstAsync<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM messages
-     WHERE chat_id = ? AND from_user_id != ? AND status = 'delivered' AND deleted_at IS NULL`,
-    [chatId, myUserId],
-  );
-  return row?.n ?? 0;
+  const rows = await db.getAllAsync<{ id: string }>(SELECT_CHAT_UNREAD, [chatId, myUserId]);
+  if (rows.length === 0) return [];
+  await db.runAsync(MARK_CHAT_READ, [chatId, myUserId]);
+  return rows.map((row) => row.id);
+}
+
+/** Последнее сообщение сразу по всем чатам — одним запросом вместо запроса на чат. */
+export async function listLastMessages(): Promise<Map<string, LocalMessage>> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<MessageRow>(SELECT_LAST_MESSAGES);
+  return new Map(rows.map((row) => [row.chat_id, fromRow(row)]));
+}
+
+/** Счётчики непрочитанного сразу по всем чатам — тоже одним запросом. */
+export async function listUnreadCounts(myUserId: string): Promise<Map<string, number>> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ chat_id: string; n: number }>(SELECT_UNREAD_COUNTS, [myUserId]);
+  return new Map(rows.map((row) => [row.chat_id, row.n]));
 }
 
 export async function messageExists(clientMsgId: string): Promise<boolean> {

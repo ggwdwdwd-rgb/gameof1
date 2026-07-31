@@ -8,7 +8,7 @@ import { avatarGradient } from "../theme/theme";
  * человека всегда один и тот же цвет. Градиент рисуется через react-native-svg,
  * чтобы не тянуть отдельную библиотеку.
  */
-export function Avatar({
+function AvatarBase({
   name,
   seed,
   size = 52,
@@ -36,6 +36,9 @@ export function Avatar({
     </View>
   );
 }
+
+/** Мемо: аватары рисуются на каждой строке списка и в каждой шапке. */
+export const Avatar = React.memo(AvatarBase);
 
 /** Одна буква для одного слова, две — для «Имя Фамилия». */
 function initialsOf(name: string): string {

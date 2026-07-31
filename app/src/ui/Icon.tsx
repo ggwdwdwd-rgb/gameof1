@@ -22,10 +22,8 @@ export type IconName =
   | "clock"
   | "alert"
   | "reply"
-  | "trash"
   | "play"
   | "pause"
-  | "chevronRight"
   | "shield"
   | "sun"
   | "moon"
@@ -37,7 +35,7 @@ export type IconName =
 
 const STROKE_WIDTH = 1.9;
 
-export function Icon({
+function IconBase({
   name,
   size = 22,
   color,
@@ -61,6 +59,9 @@ export function Icon({
   );
 }
 
+/** Мемо: в списке сообщений иконка статуса есть у каждого своего пузыря. */
+export const Icon = React.memo(IconBase);
+
 type CommonProps = {
   stroke: string;
   strokeWidth: number;
@@ -73,8 +74,6 @@ function renderPaths(name: IconName, c: CommonProps, color: string): React.React
   switch (name) {
     case "back":
       return <Polyline {...c} points="15 5 8 12 15 19" />;
-    case "chevronRight":
-      return <Polyline {...c} points="9 5 16 12 9 19" />;
     case "settings":
       return (
         <>
@@ -154,13 +153,6 @@ function renderPaths(name: IconName, c: CommonProps, color: string): React.React
         <>
           <Polyline {...c} points="9.4 5.6 4 11 9.4 16.4" />
           <Path {...c} d="M4 11h9.2a6.8 6.8 0 0 1 6.8 6.8V19" />
-        </>
-      );
-    case "trash":
-      return (
-        <>
-          <Path {...c} d="M4.6 7.2h14.8M9.4 7.2V4.9h5.2v2.3M6.6 7.2l.9 12a1.8 1.8 0 0 0 1.8 1.7h5.4a1.8 1.8 0 0 0 1.8-1.7l.9-12" />
-          <Path {...c} d="M10.4 11v6M13.6 11v6" />
         </>
       );
     case "play":

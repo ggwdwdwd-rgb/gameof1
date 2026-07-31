@@ -8,7 +8,7 @@ import { useTheme } from "../theme/ThemeContext";
  * пятна. Однотонный фон делал пузыри «плоскими», а картинка-обои утяжелила бы
  * сборку — этого достаточно и рисуется одним Svg.
  */
-export function Wallpaper(): React.ReactElement {
+function WallpaperBase(): React.ReactElement {
   const theme = useTheme();
   const blobOpacity = theme.name === "light" ? 0.5 : 0.22;
 
@@ -28,3 +28,6 @@ export function Wallpaper(): React.ReactElement {
     </View>
   );
 }
+
+/** Мемо: обои зависят только от темы, перерисовывать их с экраном незачем. */
+export const Wallpaper = React.memo(WallpaperBase);

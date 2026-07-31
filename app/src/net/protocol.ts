@@ -67,6 +67,8 @@ export interface InviteCreatedPayload {
 export interface MsgAcceptedPayload {
   clientMsgId: string;
   msgId: string;
+  /** Нужен, чтобы обновить только тот экран, которого касается сообщение. */
+  chatId: string;
 }
 
 export interface MsgDeliverPayload {

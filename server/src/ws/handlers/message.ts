@@ -51,14 +51,26 @@ function rowToDeliverable(row: MessageRow): DeliverableMessage {
 }
 
 export type MsgSendResult =
-  | { ok: true; message: DeliverableMessage; recipients: string[] }
-  | { ok: false; code: "NOT_PARTICIPANT" | "DUPLICATE" };
+  /** duplicate = сообщение уже было принято раньше; повторно рассылать не нужно. */
+  | { ok: true; message: DeliverableMessage; recipients: string[]; duplicate: boolean }
+  | { ok: false; code: "NOT_PARTICIPANT" };
 
 export function handleMsgSend(fromUserId: string, fromDeviceId: string, payload: MsgSendPayload): MsgSendResult {
   if (!isParticipant(payload.chatId, fromUserId)) return { ok: false, code: "NOT_PARTICIPANT" };
 
-  const existing = db.prepare("SELECT id FROM messages WHERE id = ?").get(payload.clientMsgId);
-  if (existing) return { ok: false, code: "DUPLICATE" };
+  // Отправка идемпотентна. Раньше повтор возвращал ошибку DUPLICATE без
+  // clientMsgId, поэтому клиент не мог убрать сообщение из своей очереди и
+  // пересылал его при каждом переподключении. Теперь повтор — это тот же
+  // ответ msg.accepted, только без повторной рассылки получателям.
+  const existing = db
+    .prepare(
+      `SELECT id, chat_id, from_user_id, from_device_id, content_type, ciphertext, nonce, reply_to, key_version, created_at, ttl_expires_at
+       FROM messages WHERE id = ?`,
+    )
+    .get(payload.clientMsgId) as MessageRow | undefined;
+  if (existing) {
+    return { ok: true, message: rowToDeliverable(existing), recipients: [], duplicate: true };
+  }
 
   const now = Date.now();
   const ttlMs = (payload.ttlSec ?? env.messageTtlDays * 86400) * 1000;
@@ -85,6 +97,7 @@ export function handleMsgSend(fromUserId: string, fromDeviceId: string, payload:
 
   return {
     ok: true,
+    duplicate: false,
     recipients: recipientUserIds(payload.chatId, fromUserId),
     message: {
       msgId: payload.clientMsgId,

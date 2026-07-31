@@ -6,6 +6,7 @@ import { listContacts, upsertContact, type Contact } from "../db/contacts";
 import {
   insertMessage,
   listMessagesForChat,
+  markChatRead,
   markMessageDeleted,
   messageExists,
   updateMessageStatus,
@@ -33,7 +34,9 @@ const WAIT_READY_MS = 10_000;
 
 interface ChatEvents extends Record<string, (...args: never[]) => void> {
   messageInserted: (chatId: string) => void;
-  messageStatusChanged: (clientMsgId: string) => void;
+  // chatId обязателен: без него каждый экран перечитывал свою переписку на
+  // любое изменение статуса в любом чате.
+  messageStatusChanged: (chatId: string, clientMsgId: string) => void;
   typingChanged: (chatId: string, fromUserId: string, isTyping: boolean) => void;
 }
 
@@ -61,13 +64,18 @@ export function describeFailure(failure: ConnectionFailure | null): string {
   }
 }
 
-interface AppContextValue {
+/** Данные, которые меняются во время работы, — на них перерисовываются экраны. */
+interface AppContextData {
   identity: DeviceIdentity;
   connectionState: ConnectionState;
   connectionFailure: ConnectionFailure | null;
   contacts: Contact[];
   chatEvents: Emitter<ChatEvents>;
   myFingerprint: string;
+}
+
+/** Действия: их идентичность не меняется, поэтому эффекты экранов стабильны. */
+interface AppActions {
   sendText: (chatId: string, text: string, replyTo?: string | null) => Promise<SendResult>;
   sendMedia: (
     chatId: string,
@@ -78,12 +86,15 @@ interface AppContextValue {
   ) => Promise<SendResult>;
   sendLocation: (chatId: string, lat: number, lng: number, replyTo?: string | null) => Promise<SendResult>;
   deleteMessage: (msgId: string, chatId: string) => Promise<void>;
-  markRead: (msgId: string, chatId: string) => void;
+  /** Помечает чат прочитанным и подтверждает серверу только реально изменившиеся сообщения. */
+  markChatRead: (chatId: string) => Promise<void>;
   setTyping: (chatId: string, isTyping: boolean) => void;
   loadMessages: (chatId: string) => Promise<LocalMessage[]>;
   createInvite: () => Promise<CreateInviteResult>;
   reconnect: () => void;
 }
+
+type AppContextValue = AppContextData & AppActions;
 
 const AppContext = createContext<AppContextValue | null>(null);
 
@@ -122,10 +133,6 @@ export function AppProvider({
   const chatEvents = useMemo(() => new Emitter<ChatEvents>(), []);
 
   useEffect(() => {
-    contactsRef.current = contacts;
-  }, [contacts]);
-
-  useEffect(() => {
     let cancelled = false;
     const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -139,7 +146,9 @@ export function AppProvider({
       setMyFingerprint(crypto.computeFingerprint(identity.identityPublicKey));
 
       const storedContacts = await listContacts();
-      if (!cancelled) setContacts(storedContacts);
+      if (cancelled) return;
+      contactsRef.current = storedContacts;
+      setContacts(storedContacts);
 
       const ws = new WsClient(identity.serverUrl, {
         kind: "device",
@@ -157,7 +166,12 @@ export function AppProvider({
       async function upsertAndTrack(member: RosterMemberPayload): Promise<Contact> {
         const contact = contactFromRoster(crypto, member);
         await upsertContact(contact);
-        setContacts((prev) => [...prev.filter((c) => c.userId !== contact.userId), contact]);
+        // Ссылку обновляем синхронно, не дожидаясь перерисовки: сразу после
+        // roster идёт запрос истории, и её расшифровка использует именно этот
+        // список. Через setContacts он появился бы позже — и сообщения легли бы
+        // в базу нерасшифрованными навсегда.
+        contactsRef.current = [...contactsRef.current.filter((c) => c.userId !== contact.userId), contact];
+        setContacts(contactsRef.current);
         return contact;
       }
 
@@ -179,19 +193,23 @@ export function AppProvider({
       });
 
       ws.events.on("msgDeliver", (payload) => {
-        void handleIncomingMessage(crypto, ws, identity, payload, chatEvents);
+        void handleIncomingMessage(crypto, ws, identity, payload, chatEvents, {
+          contacts: contactsRef.current,
+        });
       });
 
       ws.events.on("msgAccepted", (payload) => {
-        void updateMessageStatus(payload.clientMsgId, "sent").then(() => {
-          chatEvents.emit("messageStatusChanged", payload.clientMsgId);
+        void updateMessageStatus(payload.clientMsgId, "sent").then((changed) => {
+          // Статус двигается только вперёд, и если ничего не изменилось —
+          // перерисовывать экраны не нужно.
+          if (changed) chatEvents.emit("messageStatusChanged", payload.chatId, payload.clientMsgId);
         });
       });
 
       ws.events.on("ackRelay", (payload) => {
         // msgId у нас всегда равен clientMsgId (сервер не меняет id).
-        void updateMessageStatus(payload.msgId, payload.status).then(() => {
-          chatEvents.emit("messageStatusChanged", payload.msgId);
+        void updateMessageStatus(payload.msgId, payload.status).then((changed) => {
+          if (changed) chatEvents.emit("messageStatusChanged", payload.chatId, payload.msgId);
         });
       });
 
@@ -225,10 +243,21 @@ export function AppProvider({
       ws.events.on("historyPage", (payload) => {
         void (async () => {
           let maxTs = 0;
+          let inserted = 0;
           for (const message of payload.messages) {
             maxTs = Math.max(maxTs, message.ts);
-            await handleIncomingMessage(crypto, ws, identity, message, chatEvents, { skipAck: true });
+            // silent: страница истории — это до 200 сообщений, и событие на
+            // каждое означало 200 полных перечитываний переписки подряд.
+            // Сообщаем один раз, когда страница разобрана.
+            if (await handleIncomingMessage(crypto, ws, identity, message, chatEvents, {
+              skipAck: true,
+              silent: true,
+              contacts: contactsRef.current,
+            })) {
+              inserted += 1;
+            }
           }
+          if (inserted > 0) chatEvents.emit("messageInserted", payload.chatId);
           if (maxTs > 0) await setLastSyncedTs(payload.chatId, maxTs);
         })();
       });
@@ -259,7 +288,7 @@ export function AppProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const value = useMemo<AppContextValue>(() => {
+  const actions = useMemo<AppActions>(() => {
     /** Общая часть sendText/sendMedia/sendLocation: шифрование + локальная запись + отправка. */
     async function sendEncrypted(
       chatId: string,
@@ -308,12 +337,6 @@ export function AppProvider({
     }
 
     return {
-      identity,
-      connectionState,
-      connectionFailure,
-      contacts,
-      chatEvents,
-      myFingerprint,
       sendText: (chatId, text, replyTo = null) => sendEncrypted(chatId, "text", text, text, replyTo),
       sendMedia: (chatId, contentType, envelopeJson, localMeta, replyTo = null) =>
         sendEncrypted(chatId, contentType, envelopeJson, JSON.stringify(localMeta), replyTo),
@@ -326,8 +349,16 @@ export function AppProvider({
         chatEvents.emit("messageInserted", chatId);
         wsRef.current?.deleteMessage(msgId, chatId);
       },
-      markRead(msgId, chatId) {
-        wsRef.current?.ackMessage(msgId, chatId, "read");
+      async markChatRead(chatId) {
+        const changed = await markChatRead(chatId, identity.userId);
+        if (changed.length === 0) return;
+        // Локально помечаем всегда, чтобы счётчик непрочитанного в списке чатов
+        // гас сразу при открытии чата. Квитанции уходят «по возможности»: если
+        // связи нет, собеседник просто не увидит вторую галочку — повторять их
+        // при каждом переподключении нельзя, иначе вернётся поток событий.
+        const ws = wsRef.current;
+        for (const msgId of changed) ws?.ackMessage(msgId, chatId, "read");
+        chatEvents.emit("messageStatusChanged", chatId, changed[0]!);
       },
       setTyping(chatId, isTyping) {
         wsRef.current?.sendTyping(chatId, isTyping);
@@ -375,22 +406,32 @@ export function AppProvider({
         });
       },
     };
-  }, [identity, connectionState, connectionFailure, contacts, chatEvents, myFingerprint]);
+    // Только стабильные зависимости: identity не меняется за жизнь провайдера,
+    // chatEvents создан через useMemo без зависимостей, остальное — рефы.
+  }, [identity, chatEvents]);
+
+  const value = useMemo<AppContextValue>(
+    () => ({ identity, connectionState, connectionFailure, contacts, chatEvents, myFingerprint, ...actions }),
+    [identity, connectionState, connectionFailure, contacts, chatEvents, myFingerprint, actions],
+  );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
+/** true, если сообщение действительно добавлено (а не было уже известно). */
 async function handleIncomingMessage(
   crypto: Crypto,
   ws: WsClient,
   identity: DeviceIdentity,
   payload: MsgDeliverPayload,
   chatEvents: Emitter<ChatEvents>,
-  options: { skipAck?: boolean } = {},
-): Promise<void> {
-  if (await messageExists(payload.msgId)) return;
+  options: { skipAck?: boolean; silent?: boolean; contacts?: Contact[] } = {},
+): Promise<boolean> {
+  if (await messageExists(payload.msgId)) return false;
 
-  const contactsList = await listContacts();
+  // Контакты берём из памяти: обращение к sqlite на каждое входящее сообщение
+  // заметно тормозило разбор истории.
+  const contactsList = options.contacts ?? (await listContacts());
   const contactsByUserId = new Map(contactsList.map((c) => [c.userId, c]));
   const decrypted = decryptDeliveredMessage(crypto, identity, payload, contactsByUserId);
 
@@ -413,9 +454,10 @@ async function handleIncomingMessage(
     createdAt: payload.ts,
     deletedAt: null,
   });
-  chatEvents.emit("messageInserted", payload.chatId);
+  if (!options.silent) chatEvents.emit("messageInserted", payload.chatId);
 
   if (!options.skipAck && payload.fromUserId !== identity.userId) {
     ws.ackMessage(payload.msgId, payload.chatId, "delivered");
   }
+  return true;
 }

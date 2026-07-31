@@ -204,6 +204,29 @@ if (selfCopy) {
   check("автор расшифровал собственное сообщение", own === text);
 }
 
+// ── 5b. Повторная отправка того же сообщения идемпотентна ────────────────────
+// Так бывает после переподключения: подтверждение msg.accepted потерялось, и
+// клиент присылает сообщение из своей очереди заново. Раньше сервер отвечал
+// ошибкой DUPLICATE без clientMsgId, поэтому клиент не мог убрать сообщение из
+// очереди и пересылал его вечно.
+const deliveredBefore = bob.received.filter((m) => m.type === "msg.deliver").length;
+alice.received = alice.received.filter((m) => m.type !== "msg.accepted");
+alice.send("msg.send", {
+  clientMsgId,
+  chatId,
+  contentType: "text",
+  ciphertext: box.ciphertext,
+  nonce: box.nonce,
+  replyTo: null,
+});
+const reaccepted = await alice.wait("msg.accepted", (m) => m.payload.clientMsgId === clientMsgId);
+check("повтор отправки подтверждается, а не отклоняется", Boolean(reaccepted));
+check("в msg.accepted есть chatId", reaccepted.payload.chatId === chatId, String(reaccepted.payload.chatId));
+
+await new Promise((r) => setTimeout(r, 400));
+const deliveredAfter = bob.received.filter((m) => m.type === "msg.deliver").length;
+check("повтор не дублирует сообщение у получателя", deliveredAfter === deliveredBefore, `${deliveredBefore} -> ${deliveredAfter}`);
+
 // ── 6. Статусы ──────────────────────────────────────────────────────────────
 bob.send("msg.ack", { msgId: clientMsgId, chatId, status: "delivered" });
 const ackDelivered = await alice.wait("msg.ackRelay", (m) => m.payload.status === "delivered");
