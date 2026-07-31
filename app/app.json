@@ -46,9 +46,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Доступ к галерее нужен, чтобы отправить фото в чат.",
-          "cameraPermission": false,
-          "microphonePermission": false
+          "photosPermission": "Доступ к галерее нужен, чтобы отправить фото в чат."
         }
       ],
       [

@@ -23,12 +23,20 @@ import { Platform } from "react-native";
  */
 const CHANNEL_ID = "messages";
 
-/** Внутри приложения баннер не показываем: сообщение и так видно в чате. */
+/**
+ * Баннер показываем всегда.
+ *
+ * Раньше здесь стояло shouldShowBanner: false — «внутри приложения сообщение и
+ * так видно в чате». Но обработчик срабатывает и когда приложение просто
+ * открыто на другом экране, и уведомление в этом случае молча уходило в шторку.
+ * Решает, показывать ли уведомление вообще, сторона отправки (AppContext): для
+ * открытого чата оно не создаётся.
+ */
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowBanner: false,
+    shouldShowBanner: true,
     shouldShowList: true,
-    shouldPlaySound: false,
+    shouldPlaySound: true,
     shouldSetBadge: false,
   }),
 });
@@ -85,9 +93,37 @@ export async function showIncoming(message: IncomingNotification): Promise<void>
       body: message.body,
       data: { chatId: message.chatId },
     },
-    // null = показать немедленно.
-    trigger: null,
+    trigger: immediateTrigger(),
     identifier: `chat-${message.chatId}`,
+  });
+}
+
+/**
+ * «Показать немедленно» для нашего канала.
+ *
+ * trigger: null тоже показывает сразу, но канал тогда берётся тот, что задал
+ * плагин на этапе сборки. Указываем его явно — иначе уведомление могло уйти в
+ * канал с низкой важностью, где Android не показывает баннер, а тихо кладёт
+ * строку в шторку. Канал — единственное место, где на Android настраиваются
+ * звук и важность, в content его передать нельзя.
+ */
+function immediateTrigger(): Notifications.NotificationTriggerInput {
+  return Platform.OS === "android" ? { channelId: CHANNEL_ID } : null;
+}
+
+/**
+ * Пробное уведомление из настроек.
+ *
+ * Нужно, чтобы проверять уведомления не «напиши мне кто-нибудь», а одной
+ * кнопкой: сразу видно, дошло ли разрешение, создан ли канал и не выключены ли
+ * уведомления в системе.
+ */
+export async function showTest(): Promise<void> {
+  await ensureChannel();
+  await Notifications.scheduleNotificationAsync({
+    content: { title: "Cry", body: "Уведомления работают." },
+    trigger: immediateTrigger(),
+    identifier: "test",
   });
 }
 

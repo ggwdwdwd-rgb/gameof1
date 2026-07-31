@@ -10,7 +10,7 @@ import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
 import { RenameModal } from "../ui/RenameModal";
 import { describePresence } from "../ui/presence";
-import { getPermissionState, requestPermission } from "../notify/notifications";
+import { getPermissionState, requestPermission, showTest } from "../notify/notifications";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: IconName }[] = [
   { value: "light", label: "Светлая", icon: "sun" },
@@ -105,6 +105,25 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
     },
     [setNotificationsEnabled],
   );
+
+  /**
+   * Пробное уведомление. Проверять уведомления «пусть кто-нибудь напишет»
+   * неудобно, а причину молчания без такой кнопки не отличить: разрешение,
+   * канал или системный запрет.
+   */
+  const handleTestNotification = useCallback(async () => {
+    const state = await requestPermission();
+    if (state !== "granted") {
+      setPermissionDenied(state === "denied");
+      Alert.alert("Нет разрешения", "Разрешите уведомления для Cry в настройках телефона.");
+      return;
+    }
+    try {
+      await showTest();
+    } catch (error) {
+      Alert.alert("Уведомление не показалось", error instanceof Error ? error.message : String(error));
+    }
+  }, []);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -215,6 +234,19 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
               thumbColor={theme.colors.surface}
             />
           </View>
+          <Pressable
+            style={({ pressed }) => [
+              styles.row,
+              { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
+              pressed && { backgroundColor: theme.colors.surfacePressed },
+            ]}
+            onPress={() => void handleTestNotification()}
+          >
+            <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+              <Icon name="check" size={19} color={theme.colors.accent} />
+            </View>
+            <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Проверить уведомление</Text>
+          </Pressable>
           <View style={[styles.block, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider }]}>
             <Text style={[styles.hint, { color: theme.colors.textMuted, marginTop: 0 }]}>
               Уведомление показывает само приложение, когда получает сообщение — сервер о содержимом не знает. Пока Cry

@@ -14,6 +14,7 @@ import { Header } from "../ui/Header";
 import { Icon } from "../ui/Icon";
 import { ImageViewer } from "../ui/ImageViewer";
 import { MessageBubble, type Decorated } from "../ui/MessageBubble";
+import { RenameModal } from "../ui/RenameModal";
 import { describePresence } from "../ui/presence";
 import { useKeyboard } from "../ui/useKeyboard";
 import { Wallpaper } from "../ui/Wallpaper";
@@ -97,6 +98,8 @@ export function ChatScreen({
     deleteMessage,
     markChatRead,
     setTyping,
+    setActiveChat,
+    renameContact,
   } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -105,6 +108,7 @@ export function ChatScreen({
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
   const listRef = useRef<FlatList<Decorated>>(null);
 
   const contact = contacts.find((c) => c.userId === peerUserId);
@@ -161,6 +165,12 @@ export function ChatScreen({
 
   // Уходя с экрана, обязательно снимаем свой индикатор "печатает".
   useEffect(() => () => setTyping(chatId, false), [chatId, setTyping]);
+
+  // Пока чат открыт, уведомления по нему не нужны: сообщение видно на экране.
+  useEffect(() => {
+    setActiveChat(chatId);
+    return () => setActiveChat(null);
+  }, [chatId, setActiveChat]);
 
   const reportIfFailed = useCallback((result: SendResult): void => {
     if (result.ok) return;
@@ -282,6 +292,10 @@ export function ChatScreen({
               : theme.colors.textMuted
         }
         onBack={onBack}
+        // Нажатие по имени в шапке — переименование, как в мессенджерах: там же,
+        // где на него смотрят. В настройках оно тоже есть, но искать его там
+        // никто не станет.
+        onPressTitle={contact ? () => setRenaming(true) : undefined}
         avatar={
           <Avatar
             name={peerTitle}
@@ -290,6 +304,13 @@ export function ChatScreen({
             online={presence.get(peerUserId)?.online === true}
             ringColor={theme.colors.surface}
           />
+        }
+        right={
+          contact ? (
+            <Pressable onPress={() => setRenaming(true)} hitSlop={12} style={styles.headerAction}>
+              <Icon name="edit" size={20} color={theme.colors.textSecondary} />
+            </Pressable>
+          ) : undefined
         }
       />
 
@@ -361,6 +382,22 @@ export function ChatScreen({
       />
 
       <ImageViewer uri={viewerUri} onClose={() => setViewerUri(null)} />
+
+      {contact && (
+        <RenameModal
+          visible={renaming}
+          title="Название контакта"
+          hint={`Как подписать ${contact.displayName} на этом устройстве. Пустое поле вернёт настоящее имя.`}
+          initialValue={contact.localName ?? ""}
+          placeholder={contact.displayName}
+          allowEmpty
+          onCancel={() => setRenaming(false)}
+          onSubmit={(value) => {
+            setRenaming(false);
+            void renameContact(contact.userId, value);
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -371,6 +408,7 @@ function keyExtractor(row: Decorated): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  headerAction: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   list: { paddingHorizontal: 10, paddingTop: 6, paddingBottom: 12 },
   emptyContainer: { flexGrow: 1, justifyContent: "center", padding: 28 },
   empty: { alignItems: "center" },

@@ -37,7 +37,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "check:sql": "tsx scripts/check-sql.mjs"
+    "check:sql": "tsx scripts/check-sql.mjs",
+    "check:android": "node scripts/check-permissions.mjs"
   },
   "private": true
 }

@@ -3,6 +3,7 @@ import * as Sharing from "expo-sharing";
 import React, { useState } from "react";
 import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { prepareForGallery } from "../chat/media";
 import { Icon } from "./Icon";
 
 /**
@@ -12,6 +13,11 @@ import { Icon } from "./Icon";
  * приложения, и без копирования в галерею его нельзя ни открыть другим
  * приложением, ни найти в «Фото». Разрешение просим только на запись
  * (writeOnly): полный доступ ко всей галерее для сохранения не нужен.
+ *
+ * Записываем через MediaLibrary.Asset.create. Старая функция
+ * saveToLibraryAsync в SDK 57 не удалена, а заменена заглушкой, которая
+ * бросает исключение с текстом про deprecated — именно на неё приложение и
+ * ругалось при нажатии «скачать».
  */
 export function ImageViewer({
   uri,
@@ -27,26 +33,41 @@ export function ImageViewer({
     if (!uri) return;
     setBusy(true);
     try {
-      const permission = await MediaLibrary.requestPermissionsAsync(true);
-      if (!permission.granted) {
-        // Если системный диалог больше не покажут — ведём прямо в настройки,
-        // иначе совет «разрешите доступ» превращается в тупик.
-        if (permission.canAskAgain) {
-          Alert.alert("Нет доступа к галерее", "Без доступа сохранить фото нельзя.");
-        } else {
-          Alert.alert("Нет доступа к галерее", "Android больше не спросит разрешение — его нужно включить в настройках.", [
-            { text: "Отмена", style: "cancel" },
-            { text: "Открыть настройки", onPress: () => void Linking.openSettings() },
-          ]);
-        }
-        return;
+      // Разрешение спрашиваем, но отказ не считаем приговором: начиная с
+      // Android 11 запись своего файла в галерею разрешения не требует вовсе, а
+      // запрос WRITE_EXTERNAL_STORAGE там всё равно возвращает «отказано» — и
+      // проверка granted запретила бы сохранение на ровном месте. Если
+      // разрешение действительно нужно, MediaLibrary скажет об этом сама.
+      const permission = await MediaLibrary.getPermissionsAsync(true);
+      if (!permission.granted && permission.canAskAgain) {
+        await MediaLibrary.requestPermissionsAsync(true);
       }
-      await MediaLibrary.saveToLibraryAsync(uri);
+
+      // Промежуточная копия в кэше даёт файлу читаемое имя и расширение —
+      // без расширения Android отказывается заводить снимок в галерее.
+      const staged = prepareForGallery(uri);
+      try {
+        await MediaLibrary.Asset.create(staged.uri);
+      } finally {
+        if (staged.exists) staged.delete();
+      }
       Alert.alert("Готово", "Фото сохранено в галерею.");
     } catch (error) {
-      // Текст ошибки показываем как есть: без него непонятно, дело в
-      // разрешении, в самом файле или в чём-то ещё.
-      Alert.alert("Не удалось сохранить", error instanceof Error ? error.message : "Неизвестная ошибка.");
+      const detail = error instanceof Error ? error.message : String(error);
+      if (/permission/i.test(detail)) {
+        Alert.alert(
+          "Нет доступа к галерее",
+          "Разрешение на доступ к фото нужно включить вручную: Настройки → Приложения → Cry → Разрешения.",
+          [
+            { text: "Отмена", style: "cancel" },
+            { text: "Открыть настройки", onPress: () => void Linking.openSettings() },
+          ],
+        );
+        return;
+      }
+      // Текст ошибки показываем как есть: без него непонятно, дело в самом
+      // файле, в месте на диске или в чём-то ещё.
+      Alert.alert("Не удалось сохранить", detail);
     } finally {
       setBusy(false);
     }

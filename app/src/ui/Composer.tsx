@@ -1,5 +1,6 @@
 import {
   RecordingPresets,
+  getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioRecorder,
@@ -90,44 +91,54 @@ function ComposerBase({
    * записывая длинное сообщение, неудобно.
    */
   const handleToggleRecording = useCallback(async () => {
-    if (recorderState.isRecording) {
-      const durationMs = recorderState.durationMillis;
-      await recorder.stop();
-      const uri = recorder.uri;
-      if (!uri) {
-        Alert.alert("Запись не получилась", "Файл не создан — попробуйте записать ещё раз.");
+    // try обязателен вокруг всего: раньше он покрывал только запуск записи, а
+    // запрос разрешения и остановка были снаружи. Их исключение уходило в
+    // unhandled rejection — по нажатию кнопки не происходило вообще ничего, и
+    // выглядело это как «не запрашивает доступ и не записывает».
+    try {
+      if (recorderState.isRecording) {
+        const durationMs = recorderState.durationMillis;
+        await recorder.stop();
+        const uri = recorder.uri;
+        if (!uri) {
+          Alert.alert("Запись не получилась", "Файл не создан — попробуйте записать ещё раз.");
+          return;
+        }
+        void onVoiceRecorded(uri, durationMs);
         return;
       }
-      void onVoiceRecorded(uri, durationMs);
-      return;
-    }
 
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      // Android показывает системный диалог не больше двух раз. Дальше запрос
-      // отклоняется молча, и «разрешите в настройках» превращается в тупик —
-      // поэтому уводим прямо в настройки приложения.
-      if (permission.canAskAgain) {
-        Alert.alert("Нет доступа к микрофону", "Без доступа записать голосовое нельзя.");
-      } else {
-        Alert.alert(
-          "Нет доступа к микрофону",
-          "Android больше не будет спрашивать разрешение — его нужно включить вручную в настройках приложения.",
-          [
-            { text: "Отмена", style: "cancel" },
-            { text: "Открыть настройки", onPress: () => void Linking.openSettings() },
-          ],
-        );
+      // Сначала спрашиваем текущее состояние: если разрешение уже отозвано
+      // навсегда, системный диалог не появится, и об этом нужно сказать прямо,
+      // а не молчать после нажатия.
+      const current = await getRecordingPermissionsAsync();
+      const permission = current.granted ? current : await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        // Android показывает системный диалог не больше двух раз. Дальше запрос
+        // отклоняется молча, и «разрешите в настройках» превращается в тупик —
+        // поэтому уводим прямо в настройки приложения.
+        if (permission.canAskAgain) {
+          Alert.alert("Нет доступа к микрофону", "Без доступа записать голосовое нельзя.");
+        } else {
+          Alert.alert(
+            "Нет доступа к микрофону",
+            "Android больше не будет спрашивать разрешение — его нужно включить вручную: Настройки → Приложения → Cry → Разрешения → Микрофон.",
+            [
+              { text: "Отмена", style: "cancel" },
+              { text: "Открыть настройки", onPress: () => void Linking.openSettings() },
+            ],
+          );
+        }
+        return;
       }
-      return;
-    }
 
-    try {
       await setAudioModeAsync({ allowsRecording: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
     } catch (error) {
-      Alert.alert("Не удалось начать запись", error instanceof Error ? error.message : "Неизвестная ошибка.");
+      // Текст ошибки показываем как есть: иначе непонятно, дело в разрешении,
+      // в занятом микрофоне или в чём-то ещё.
+      Alert.alert("Голосовое не записалось", error instanceof Error ? error.message : String(error));
     }
   }, [onVoiceRecorded, recorder, recorderState.durationMillis, recorderState.isRecording]);
 

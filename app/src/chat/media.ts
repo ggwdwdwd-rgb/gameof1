@@ -65,6 +65,35 @@ export function localFileName(stableName: string, mimeType: string, fileName?: s
   return `${stableName}.${extensionFor(mimeType, fileName)}`;
 }
 
+/** Метка времени для имени файла в галерее: 2026-07-31_18-40-12. */
+function galleryStamp(date: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
+  );
+}
+
+/**
+ * Копия файла в кэше под именем, пригодным для галереи.
+ *
+ * Зачем копия: MediaLibrary берёт имя и тип создаваемого снимка из имени
+ * исходного файла. У нас файлы называются по msgId — в «Фото» появлялись бы
+ * строки вида 7f3c9e2a…, а у полученных до появления extensionFor файлов
+ * расширения нет вообще, и Android не понимает, что это картинка.
+ */
+export function prepareForGallery(localUri: string, mimeType?: string): File {
+  const source = new File(localUri);
+  // Расширение самого файла надёжнее mime-типа: файл уже лежит на диске,
+  // а mimeType в это место может и не дойти.
+  const own = source.extension.replace(/^\./, "").toLowerCase();
+  const extension = own !== "" ? own : extensionFor(mimeType ?? "image/jpeg");
+  const dest = new File(Paths.cache, `Cry_${galleryStamp(new Date())}.${extension}`);
+  if (dest.exists) dest.delete();
+  source.copySync(dest);
+  return dest;
+}
+
 function mediaDirectory(): Directory {
   const dir = new Directory(Paths.document, "media");
   if (!dir.exists) dir.create({ intermediates: true });

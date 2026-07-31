@@ -110,6 +110,8 @@ interface AppActions {
   renameContact: (userId: string, localName: string | null) => Promise<void>;
   /** Включение и выключение уведомлений о новых сообщениях. */
   setNotificationsEnabled: (enabled: boolean) => Promise<void>;
+  /** Какой чат открыт на экране: для него уведомление не показываем. */
+  setActiveChat: (chatId: string | null) => void;
 }
 
 type AppContextValue = AppContextData & AppActions;
@@ -160,8 +162,10 @@ export function AppProvider({
    * соединение, и после перезапуска всё равно приходит заново в roster.
    */
   const [presence, setPresence] = useState<ReadonlyMap<string, Presence>>(new Map());
-  /** Свёрнуто приложение или нет: уведомление показываем только когда свёрнуто. */
+  /** Свёрнуто приложение или нет. */
   const appActiveRef = useRef(true);
+  /** Чат, открытый прямо сейчас: только для него уведомление лишнее. */
+  const activeChatRef = useRef<string | null>(null);
   const notificationsRef = useRef(false);
   const cryptoRef = useRef<Crypto | null>(null);
   const wsRef = useRef<WsClient | null>(null);
@@ -288,10 +292,15 @@ export function AppProvider({
       ws.events.on("msgDeliver", (payload) => {
         void handleIncomingMessage(crypto, ws, identity, payload, chatEvents, {
           contacts: contactsRef.current,
-          // Уведомление показываем только для чужих сообщений и только когда
-          // приложение свёрнуто: внутри чата оно и так видно.
+          // Уведомление показываем для чужих сообщений всегда, кроме одного
+          // случая: приложение открыто именно на этом чате — там сообщение и так
+          // видно. Раньше условием было «только когда приложение свёрнуто», и
+          // уведомления не появлялись, если человек в это время просто листал
+          // список чатов.
           notify:
-            notificationsRef.current && !appActiveRef.current && payload.fromUserId !== identity.userId
+            notificationsRef.current &&
+            payload.fromUserId !== identity.userId &&
+            !(appActiveRef.current && activeChatRef.current === payload.chatId)
               ? (contentType, plaintext) => {
                   const sender = contactsRef.current.find((c) => c.userId === payload.fromUserId);
                   void showIncoming({
@@ -510,6 +519,9 @@ export function AppProvider({
         notificationsRef.current = enabled;
         setNotificationsEnabled(enabled);
         await setSetting(NOTIFICATIONS_SETTING, enabled ? "1" : "0");
+      },
+      setActiveChat(chatId) {
+        activeChatRef.current = chatId;
       },
       async createInvite() {
         const ws = wsRef.current;
