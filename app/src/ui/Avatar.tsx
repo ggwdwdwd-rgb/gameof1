@@ -12,10 +12,16 @@ function AvatarBase({
   name,
   seed,
   size = 52,
+  online = false,
+  ringColor,
 }: {
   name: string;
   seed: string;
   size?: number;
+  /** Зелёная точка «в сети» в правом нижнем углу. */
+  online?: boolean;
+  /** Цвет обводки точки — под фон, на котором нарисован аватар. */
+  ringColor?: string;
 }): React.ReactElement {
   const initials = initialsOf(name);
   const [from, to] = avatarGradient(seed);
@@ -33,6 +39,20 @@ function AvatarBase({
         <Rect width={size} height={size} rx={size / 2} fill={`url(#${gradientId})`} />
       </Svg>
       <Text style={[styles.text, { fontSize: size * 0.4 }]}>{initials}</Text>
+      {online && (
+        <View
+          style={[
+            styles.onlineDot,
+            {
+              width: size * 0.28,
+              height: size * 0.28,
+              borderRadius: size * 0.14,
+              borderWidth: Math.max(1.5, size * 0.05),
+              borderColor: ringColor ?? "#fff",
+            },
+          ]}
+        />
+      )}
     </View>
   );
 }
@@ -49,6 +69,8 @@ function initialsOf(name: string): string {
 }
 
 const styles = StyleSheet.create({
-  wrap: { alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  // overflow не скрываем: точка «в сети» выходит за круг аватара.
+  wrap: { alignItems: "center", justifyContent: "center" },
+  onlineDot: { position: "absolute", right: 0, bottom: 0, backgroundColor: "#3f9e63" },
   text: { color: "#fff", fontWeight: "600", letterSpacing: 0.3 },
 });

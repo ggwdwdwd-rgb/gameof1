@@ -3,7 +3,10 @@ import { getDb } from "./database";
 export interface Contact {
   userId: string;
   deviceId: string;
+  /** Имя, которое задал сам человек (приходит в roster). */
   displayName: string;
+  /** Своё название этого контакта; null — используется displayName. */
+  localName: string | null;
   identityPublicKey: string;
   encryptionPublicKey: string;
   fingerprint: string;
@@ -18,6 +21,7 @@ interface ContactRow {
   encryption_public_key: string;
   fingerprint: string;
   is_revoked: number;
+  local_name: string | null;
 }
 
 function fromRow(row: ContactRow): Contact {
@@ -25,6 +29,7 @@ function fromRow(row: ContactRow): Contact {
     userId: row.user_id,
     deviceId: row.device_id,
     displayName: row.display_name,
+    localName: row.local_name,
     identityPublicKey: row.identity_public_key,
     encryptionPublicKey: row.encryption_public_key,
     fingerprint: row.fingerprint,
@@ -58,8 +63,21 @@ export async function upsertContact(contact: Contact): Promise<void> {
 
 export async function listContacts(): Promise<Contact[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<ContactRow>("SELECT * FROM contacts ORDER BY display_name ASC");
+  const rows = await db.getAllAsync<ContactRow>(
+    "SELECT * FROM contacts ORDER BY COALESCE(local_name, display_name) ASC",
+  );
   return rows.map(fromRow);
+}
+
+/** Своё название контакта; пустая строка убирает его и возвращает имя из roster. */
+export async function setContactLocalName(userId: string, localName: string | null): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE contacts SET local_name = ? WHERE user_id = ?", [localName, userId]);
+}
+
+/** Как контакт подписан на экранах: своё название важнее имени из roster. */
+export function contactTitle(contact: Contact): string {
+  return contact.localName ?? contact.displayName;
 }
 
 export async function getContact(userId: string): Promise<Contact | null> {

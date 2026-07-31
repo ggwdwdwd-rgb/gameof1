@@ -2,11 +2,14 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { describeFailure, useApp } from "../context/AppContext";
+import { contactTitle, type Contact } from "../db/contacts";
 import { useTheme, useThemePreference } from "../theme/ThemeContext";
 import type { ThemePreference } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
 import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
+import { RenameModal } from "../ui/RenameModal";
+import { describePresence } from "../ui/presence";
 import { getPermissionState, requestPermission } from "../notify/notifications";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: IconName }[] = [
@@ -42,6 +45,8 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
     notificationsEnabled,
     setNotificationsEnabled,
     renameSelf,
+    renameContact,
+    presence,
   } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -55,6 +60,8 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
   const [savingName, setSavingName] = useState(false);
   /** Разрешение на уведомления могло быть отозвано в настройках телефона. */
   const [permissionDenied, setPermissionDenied] = useState(false);
+  /** Контакт, которому меняем своё название. */
+  const [renaming, setRenaming] = useState<Contact | null>(null);
 
   useEffect(() => {
     void getPermissionState().then((state) => setPermissionDenied(state === "denied"));
@@ -268,30 +275,73 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
               </Text>
             </View>
           ) : (
-            activeContacts.map((contact, index) => (
-              <View
-                key={contact.userId}
-                style={[
-                  styles.row,
-                  index > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
-                ]}
-              >
-                <Avatar name={contact.displayName} seed={contact.userId} size={42} />
-                <View style={styles.memberText}>
-                  <Text style={[styles.memberName, { color: theme.colors.textPrimary }]}>{contact.displayName}</Text>
-                  <Text style={[styles.memberFingerprint, { color: theme.colors.textMuted }]}>
-                    {contact.fingerprint}
-                  </Text>
-                </View>
-              </View>
-            ))
+            activeContacts.map((contact, index) => {
+              const online = presence.get(contact.userId)?.online === true;
+              const status = describePresence(presence.get(contact.userId));
+              return (
+                <Pressable
+                  key={contact.userId}
+                  style={({ pressed }) => [
+                    styles.row,
+                    index > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
+                    pressed && { backgroundColor: theme.colors.surfacePressed },
+                  ]}
+                  onPress={() => setRenaming(contact)}
+                >
+                  <Avatar
+                    name={contactTitle(contact)}
+                    seed={contact.userId}
+                    size={42}
+                    online={online}
+                    ringColor={theme.colors.surface}
+                  />
+                  <View style={styles.memberText}>
+                    <Text style={[styles.memberName, { color: theme.colors.textPrimary }]}>
+                      {contactTitle(contact)}
+                    </Text>
+                    {/* Если название своё — показываем и настоящее имя, чтобы
+                        человека можно было опознать. */}
+                    <Text style={[styles.memberFingerprint, { color: theme.colors.textMuted }]}>
+                      {contact.localName !== null ? `${contact.displayName} · ` : ""}
+                      {status !== "" ? status : contact.fingerprint}
+                    </Text>
+                  </View>
+                  <Icon name="edit" size={17} color={theme.colors.textMuted} />
+                </Pressable>
+              );
+            })
           )}
         </Card>
+
+        {activeContacts.length > 0 && (
+          <Text style={[styles.hint, { color: theme.colors.textMuted, marginLeft: 6 }]}>
+            Нажмите на участника, чтобы подписать его по-своему — это название видно только на вашем устройстве.
+          </Text>
+        )}
 
         <Text style={[styles.footer, { color: theme.colors.textMuted }]}>
           Cry · сообщения шифруются на устройстве, сервер видит только зашифрованные блобы и удаляет их после доставки.
         </Text>
       </ScrollView>
+
+      <RenameModal
+        visible={renaming !== null}
+        title="Название контакта"
+        hint={
+          renaming
+            ? `Как подписать ${renaming.displayName} на этом устройстве. Пустое поле вернёт настоящее имя.`
+            : undefined
+        }
+        initialValue={renaming?.localName ?? ""}
+        placeholder={renaming?.displayName ?? ""}
+        allowEmpty
+        onCancel={() => setRenaming(null)}
+        onSubmit={(value) => {
+          const target = renaming;
+          setRenaming(null);
+          if (target) void renameContact(target.userId, value);
+        }}
+      />
     </View>
   );
 }

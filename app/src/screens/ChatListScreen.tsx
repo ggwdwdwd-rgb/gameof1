@@ -3,6 +3,7 @@ import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { dmChatId } from "../chat/chatId";
 import { describeFailure, useApp } from "../context/AppContext";
+import { contactTitle } from "../db/contacts";
 import { listLastMessages, listUnreadCounts, type LocalMessage } from "../db/messages";
 import { useTheme } from "../theme/ThemeContext";
 import type { Theme } from "../theme/theme";
@@ -14,6 +15,7 @@ interface ChatRow {
   chatId: string;
   userId: string;
   title: string;
+  online: boolean;
   preview: string;
   /** Иконка вложения перед текстом превью — как в мессенджерах. */
   previewIcon: IconName | null;
@@ -83,7 +85,7 @@ const ChatRowView = React.memo(function ChatRowView({
       style={({ pressed }) => [styles.row, { backgroundColor: pressed ? theme.colors.surfacePressed : "transparent" }]}
       onPress={() => onPress(row)}
     >
-      <Avatar name={row.title} seed={row.userId} size={54} />
+      <Avatar name={row.title} seed={row.userId} size={54} online={row.online} ringColor={theme.colors.background} />
 
       <View style={styles.rowText}>
         <View style={styles.rowTopLine}>
@@ -139,7 +141,7 @@ export function ChatListScreen({
   onOpenSettings: () => void;
   onAddPerson: () => void;
 }): React.ReactElement {
-  const { identity, connectionState, connectionFailure, contacts, chatEvents, reconnect } = useApp();
+  const { identity, connectionState, connectionFailure, contacts, presence, chatEvents, reconnect } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<ChatRow[]>([]);
@@ -158,7 +160,8 @@ export function ChatListScreen({
         return {
           chatId,
           userId: contact.userId,
-          title: contact.displayName,
+          title: contactTitle(contact),
+          online: presence.get(contact.userId)?.online === true,
           preview: preview.text,
           previewIcon: preview.icon,
           ts: last?.createdAt ?? 0,
@@ -167,7 +170,7 @@ export function ChatListScreen({
         };
       });
     setRows(contactRows.sort((a, b) => b.ts - a.ts));
-  }, [contacts, identity.userId]);
+  }, [contacts, identity.userId, presence]);
 
   // Разбор страницы истории или серия квитанций дают события пачкой. Склеиваем
   // их в одно обновление на следующий тик, иначе список перечитывался бы

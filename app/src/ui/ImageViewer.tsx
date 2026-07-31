@@ -1,7 +1,7 @@
 import * as MediaLibrary from "expo-media-library";
 import * as Sharing from "expo-sharing";
 import React, { useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Icon } from "./Icon";
 
@@ -10,7 +10,8 @@ import { Icon } from "./Icon";
  *
  * Сохранение — через expo-media-library: файл лежит в приватной папке
  * приложения, и без копирования в галерею его нельзя ни открыть другим
- * приложением, ни найти в «Фото».
+ * приложением, ни найти в «Фото». Разрешение просим только на запись
+ * (writeOnly): полный доступ ко всей галерее для сохранения не нужен.
  */
 export function ImageViewer({
   uri,
@@ -26,15 +27,26 @@ export function ImageViewer({
     if (!uri) return;
     setBusy(true);
     try {
-      const permission = await MediaLibrary.requestPermissionsAsync();
+      const permission = await MediaLibrary.requestPermissionsAsync(true);
       if (!permission.granted) {
-        Alert.alert("Нет доступа к галерее", "Разрешите доступ к фото в настройках устройства.");
+        // Если системный диалог больше не покажут — ведём прямо в настройки,
+        // иначе совет «разрешите доступ» превращается в тупик.
+        if (permission.canAskAgain) {
+          Alert.alert("Нет доступа к галерее", "Без доступа сохранить фото нельзя.");
+        } else {
+          Alert.alert("Нет доступа к галерее", "Android больше не спросит разрешение — его нужно включить в настройках.", [
+            { text: "Отмена", style: "cancel" },
+            { text: "Открыть настройки", onPress: () => void Linking.openSettings() },
+          ]);
+        }
         return;
       }
       await MediaLibrary.saveToLibraryAsync(uri);
       Alert.alert("Готово", "Фото сохранено в галерею.");
-    } catch {
-      Alert.alert("Не удалось сохранить", "Попробуйте ещё раз.");
+    } catch (error) {
+      // Текст ошибки показываем как есть: без него непонятно, дело в
+      // разрешении, в самом файле или в чём-то ещё.
+      Alert.alert("Не удалось сохранить", error instanceof Error ? error.message : "Неизвестная ошибка.");
     } finally {
       setBusy(false);
     }
@@ -42,11 +54,15 @@ export function ImageViewer({
 
   async function handleShare(): Promise<void> {
     if (!uri) return;
-    if (!(await Sharing.isAvailableAsync())) {
-      Alert.alert("Недоступно", "На этом устройстве нельзя поделиться файлом.");
-      return;
+    try {
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert("Недоступно", "На этом устройстве нельзя поделиться файлом.");
+        return;
+      }
+      await Sharing.shareAsync(uri);
+    } catch (error) {
+      Alert.alert("Не удалось поделиться", error instanceof Error ? error.message : "Неизвестная ошибка.");
     }
-    await Sharing.shareAsync(uri);
   }
 
   return (

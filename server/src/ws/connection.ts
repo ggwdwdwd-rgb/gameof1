@@ -7,10 +7,11 @@ import { recipientDeviceIds } from "./handlers/chat.js";
 import { handleInviteRedeem } from "./handlers/invite.js";
 import { createInvite } from "../invites.js";
 import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from "./handlers/message.js";
-import { getRosterExcluding } from "./handlers/roster.js";
+import { getRosterExcluding, touchLastSeen } from "./handlers/roster.js";
 import { updateDisplayName } from "./handlers/profile.js";
 import {
   broadcastToAllExcept,
+  hasOtherConnections,
   registerConnection,
   send,
   sendToDevice,
@@ -78,8 +79,15 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           }
           state = { stage: "authenticated", userId: result.userId, deviceId: result.deviceId };
           registerConnection(result.deviceId, result.userId, socket);
+          touchLastSeen(result.userId);
           send(socket, envelope("auth.ok", { userId: result.userId, deviceId: result.deviceId, serverTime: Date.now() }));
+          // roster формируем уже после registerConnection, иначе сам подключившийся
+          // не увидел бы себя онлайн у остальных в первый момент.
           send(socket, envelope("roster.snapshot", { members: getRosterExcluding(result.deviceId) }));
+          broadcastToAllExcept(
+            result.deviceId,
+            envelope("presence", { userId: result.userId, online: true, lastSeenAt: null }),
+          );
           log.info({ userId: result.userId, deviceId: result.deviceId }, "устройство аутентифицировано");
           return;
         }
@@ -94,6 +102,7 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           }
           state = { stage: "authenticated", userId: result.userId, deviceId: payload.deviceId };
           registerConnection(payload.deviceId, result.userId, socket);
+          touchLastSeen(result.userId);
           send(socket, envelope("invite.redeem.ok", { userId: result.userId }));
           send(socket, envelope("roster.snapshot", { members: getRosterExcluding(payload.deviceId) }));
           broadcastToAllExcept(
@@ -106,6 +115,13 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
               encryptionPublicKey: payload.encryptionPublicKey,
               joinedAt: Date.now(),
             }),
+          );
+          // Присутствие рассылаем и здесь: member.joined говорит «появился
+          // участник», но не «он сейчас в сети», а клиент ведёт эти состояния
+          // отдельно.
+          broadcastToAllExcept(
+            payload.deviceId,
+            envelope("presence", { userId: result.userId, online: true, lastSeenAt: null }),
           );
           log.info({ userId: result.userId }, "новый участник зарегистрирован по инвайту");
           return;
@@ -221,8 +237,13 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
   });
 
   socket.on("close", () => {
-    if (state?.stage === "authenticated") {
-      unregisterConnection(state.deviceId);
-    }
+    if (state?.stage !== "authenticated") return;
+    const { userId, deviceId } = state;
+    unregisterConnection(deviceId);
+    // «Не в сети» объявляем только когда у участника не осталось соединений:
+    // при двух устройствах закрытие одного не означает, что человек ушёл.
+    if (hasOtherConnections(userId, deviceId)) return;
+    const lastSeenAt = touchLastSeen(userId);
+    broadcastToAllExcept(null, envelope("presence", { userId, online: false, lastSeenAt }));
   });
 }

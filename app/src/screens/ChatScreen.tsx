@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { buildEnvelopeFromLocalFile, persistLocalFile } from "../chat/media";
 import { getCurrentLocationOnce, pickAndCompressImage, pickFile } from "../chat/pickers";
 import { useApp, type SendResult } from "../context/AppContext";
+import { contactTitle } from "../db/contacts";
 import { listMessagesForChat, type LocalMessage } from "../db/messages";
 import { useTheme } from "../theme/ThemeContext";
 import { Avatar } from "../ui/Avatar";
@@ -13,6 +14,7 @@ import { Header } from "../ui/Header";
 import { Icon } from "../ui/Icon";
 import { ImageViewer } from "../ui/ImageViewer";
 import { MessageBubble, type Decorated } from "../ui/MessageBubble";
+import { describePresence } from "../ui/presence";
 import { useKeyboard } from "../ui/useKeyboard";
 import { Wallpaper } from "../ui/Wallpaper";
 import { uuidv4 } from "../util/uuid";
@@ -84,8 +86,18 @@ export function ChatScreen({
   peerUserId: string;
   onBack: () => void;
 }): React.ReactElement {
-  const { identity, contacts, chatEvents, sendText, sendMedia, sendLocation, deleteMessage, markChatRead, setTyping } =
-    useApp();
+  const {
+    identity,
+    contacts,
+    presence,
+    chatEvents,
+    sendText,
+    sendMedia,
+    sendLocation,
+    deleteMessage,
+    markChatRead,
+    setTyping,
+  } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const keyboard = useKeyboard();
@@ -96,6 +108,10 @@ export function ChatScreen({
   const listRef = useRef<FlatList<Decorated>>(null);
 
   const contact = contacts.find((c) => c.userId === peerUserId);
+  // Имя берём из контакта, а не только из пропса: если его переименовали, пока
+  // чат открыт, шапка должна обновиться сама.
+  const peerTitle = contact ? contactTitle(contact) : title;
+  const presenceText = describePresence(presence.get(peerUserId));
 
   const nameFor = useCallback(
     (userId: string): string => {
@@ -244,21 +260,37 @@ export function ChatScreen({
   );
 
   return (
-    // Отступ снизу равен высоте клавиатуры. KeyboardAvoidingView здесь не
+    // Отступ снизу — ровно та часть высоты клавиатуры, которую система не
+    // освободила сама (см. useKeyboard). KeyboardAvoidingView здесь не
     // подходит: он считает отступ по onLayout содержимого, и с растущим
     // multiline-вводом получалась петля «ввод вырос → отступ изменился →
     // ввод пересчитался», из-за которой приложение подвисало ровно тогда,
     // когда сообщение перестаёт влезать в одну строку.
-    <View style={[styles.container, { backgroundColor: theme.colors.background, paddingBottom: keyboard.height }]}>
+    <View style={[styles.container, { backgroundColor: theme.colors.background, paddingBottom: keyboard.avoidOffset }]}>
       <Wallpaper />
 
       <Header
         align="left"
-        title={title}
-        subtitle={peerTyping ? "печатает…" : contact ? `отпечаток ${contact.fingerprint.slice(0, 9)}…` : undefined}
-        subtitleColor={peerTyping ? theme.colors.accent : theme.colors.textMuted}
+        title={peerTitle}
+        // «Печатает» важнее статуса, статус важнее отпечатка ключа.
+        subtitle={peerTyping ? "печатает…" : presenceText !== "" ? presenceText : undefined}
+        subtitleColor={
+          peerTyping
+            ? theme.colors.accent
+            : presence.get(peerUserId)?.online === true
+              ? theme.colors.success
+              : theme.colors.textMuted
+        }
         onBack={onBack}
-        avatar={<Avatar name={title} seed={peerUserId} size={38} />}
+        avatar={
+          <Avatar
+            name={peerTitle}
+            seed={peerUserId}
+            size={38}
+            online={presence.get(peerUserId)?.online === true}
+            ringColor={theme.colors.surface}
+          />
+        }
       />
 
       <FlatList
@@ -281,8 +313,8 @@ export function ChatScreen({
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Avatar name={title} seed={peerUserId} size={84} />
-            <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}>{title}</Text>
+            <Avatar name={peerTitle} seed={peerUserId} size={84} />
+            <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}>{peerTitle}</Text>
             <View style={[styles.emptyCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
               <View style={styles.emptyCardHead}>
                 <Icon name="shield" size={18} color={theme.colors.accent} />

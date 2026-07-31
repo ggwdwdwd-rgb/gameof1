@@ -43,6 +43,13 @@ export interface MsgAckPayload {
   status: "delivered" | "read";
 }
 
+/** Сервер рассылает, когда участник появился в сети или ушёл из неё. */
+export interface PresencePayload {
+  userId: string;
+  online: boolean;
+  lastSeenAt: number | null;
+}
+
 export interface ProfileUpdatePayload {
   displayName: string;
 }

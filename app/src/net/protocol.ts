@@ -36,6 +36,10 @@ export interface RosterMemberPayload {
   userId: string;
   deviceId: string;
   displayName: string;
+  /** Есть ли у участника открытое соединение прямо сейчас. */
+  online?: boolean;
+  /** Когда он был на связи последний раз. */
+  lastSeenAt?: number | null;
   identityPublicKey: string;
   encryptionPublicKey: string;
   joinedAt: number;
@@ -100,6 +104,13 @@ export interface MsgAckRelayPayload {
 
 export interface ProfileUpdatePayload {
   displayName: string;
+}
+
+/** Сервер рассылает, когда участник появился в сети или ушёл из неё. */
+export interface PresencePayload {
+  userId: string;
+  online: boolean;
+  lastSeenAt: number | null;
 }
 
 /** Сервер рассылает всем, когда участник сменил имя. */

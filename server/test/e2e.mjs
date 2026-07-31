@@ -267,6 +267,35 @@ const foreignRejected = await bob.wait(
 );
 check("чужой чат отклонён", Boolean(foreignRejected.payload.code), foreignRejected.payload.code);
 
+// ── 8a. Статус «в сети» ─────────────────────────────────────────────────────
+check("в roster есть признак online", rosterB.payload.members.every((m) => typeof m.online === "boolean"));
+check(
+  "первый участник виден как online, пока подключён",
+  rosterB.payload.members.find((m) => m.userId === alice.userId)?.online === true,
+);
+
+// Отдельное соединение, которое подключится и отключится: остальные должны
+// увидеть и появление, и уход.
+const watcherCode = await (async () => {
+  alice.send("invite.create", {});
+  alice.received = alice.received.filter((m) => m.type !== "invite.created");
+  const created2 = await alice.wait("invite.created");
+  return created2.payload.code;
+})();
+const watcher = new Client("Наблюдатель");
+await watcher.open();
+await watcher.redeem(watcherCode);
+const cameOnline = await alice.wait("presence", (m) => m.payload.userId === watcher.userId && m.payload.online === true);
+check("появление в сети рассылается остальным", Boolean(cameOnline));
+
+watcher.ws.close();
+const wentOffline = await alice.wait(
+  "presence",
+  (m) => m.payload.userId === watcher.userId && m.payload.online === false,
+);
+check("уход из сети рассылается остальным", Boolean(wentOffline));
+check("вместе с уходом приходит время последнего появления", typeof wentOffline.payload.lastSeenAt === "number");
+
 // ── 8b. Переименование участника ────────────────────────────────────────────
 bob.send("profile.update", { displayName: "Боб Новый" });
 const renamed = await alice.wait("member.updated", (m) => m.payload.userId === bob.userId);

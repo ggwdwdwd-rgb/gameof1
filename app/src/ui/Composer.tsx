@@ -6,7 +6,7 @@ import {
   useAudioRecorderState,
 } from "expo-audio";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useTheme } from "../theme/ThemeContext";
 import { Icon, type IconName } from "./Icon";
 
@@ -94,21 +94,41 @@ function ComposerBase({
       const durationMs = recorderState.durationMillis;
       await recorder.stop();
       const uri = recorder.uri;
-      if (uri) void onVoiceRecorded(uri, durationMs);
+      if (!uri) {
+        Alert.alert("Запись не получилась", "Файл не создан — попробуйте записать ещё раз.");
+        return;
+      }
+      void onVoiceRecorded(uri, durationMs);
       return;
     }
 
     const permission = await requestRecordingPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert(
-        "Нет доступа к микрофону",
-        "Разрешите доступ к микрофону в настройках устройства — без него голосовые записать нельзя.",
-      );
+      // Android показывает системный диалог не больше двух раз. Дальше запрос
+      // отклоняется молча, и «разрешите в настройках» превращается в тупик —
+      // поэтому уводим прямо в настройки приложения.
+      if (permission.canAskAgain) {
+        Alert.alert("Нет доступа к микрофону", "Без доступа записать голосовое нельзя.");
+      } else {
+        Alert.alert(
+          "Нет доступа к микрофону",
+          "Android больше не будет спрашивать разрешение — его нужно включить вручную в настройках приложения.",
+          [
+            { text: "Отмена", style: "cancel" },
+            { text: "Открыть настройки", onPress: () => void Linking.openSettings() },
+          ],
+        );
+      }
       return;
     }
-    await setAudioModeAsync({ allowsRecording: true });
-    await recorder.prepareToRecordAsync();
-    recorder.record();
+
+    try {
+      await setAudioModeAsync({ allowsRecording: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch (error) {
+      Alert.alert("Не удалось начать запись", error instanceof Error ? error.message : "Неизвестная ошибка.");
+    }
   }, [onVoiceRecorded, recorder, recorderState.durationMillis, recorderState.isRecording]);
 
   const hasDraft = draft.trim().length > 0;

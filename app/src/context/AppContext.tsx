@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { AppState } from "react-native";
 import { createCrypto } from "@family-messenger/crypto";
 import { getCrypto } from "../crypto/sodium";
-import { listContacts, upsertContact, type Contact } from "../db/contacts";
+import { listContacts, setContactLocalName, upsertContact, type Contact } from "../db/contacts";
 import {
   insertMessage,
   listMessagesForChat,
@@ -76,6 +76,8 @@ interface AppContextData {
   connectionState: ConnectionState;
   connectionFailure: ConnectionFailure | null;
   contacts: Contact[];
+  /** Присутствие по userId: online сейчас и когда был последний раз. */
+  presence: ReadonlyMap<string, Presence>;
   chatEvents: Emitter<ChatEvents>;
   myFingerprint: string;
   /** Показывать ли уведомления о сообщениях, пришедших пока приложение свёрнуто. */
@@ -104,6 +106,8 @@ interface AppActions {
   reconnect: () => void;
   /** Смена своего имени: локально, на сервере и у остальных участников. */
   renameSelf: (displayName: string) => Promise<boolean>;
+  /** Своё название контакта — только на этом устройстве, никуда не отправляется. */
+  renameContact: (userId: string, localName: string | null) => Promise<void>;
   /** Включение и выключение уведомлений о новых сообщениях. */
   setNotificationsEnabled: (enabled: boolean) => Promise<void>;
 }
@@ -118,16 +122,24 @@ export function useApp(): AppContextValue {
   return ctx;
 }
 
-function contactFromRoster(crypto: Crypto, member: RosterMemberPayload): Contact {
+/** localName берём из уже известного контакта: он локальный и с сервера не приходит. */
+function contactFromRoster(crypto: Crypto, member: RosterMemberPayload, previous?: Contact): Contact {
   return {
     userId: member.userId,
     deviceId: member.deviceId,
     displayName: member.displayName,
+    localName: previous?.localName ?? null,
     identityPublicKey: member.identityPublicKey,
     encryptionPublicKey: member.encryptionPublicKey,
     fingerprint: crypto.computeFingerprint(member.identityPublicKey),
     isRevoked: false,
   };
+}
+
+/** Кто сейчас в сети и когда был последний раз. */
+export interface Presence {
+  online: boolean;
+  lastSeenAt: number | null;
 }
 
 export function AppProvider({
@@ -143,6 +155,11 @@ export function AppProvider({
   const [myFingerprint, setMyFingerprint] = useState("");
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [displayName, setDisplayName] = useState(identity.displayName);
+  /**
+   * Присутствие не храним в локальной базе: оно живёт только пока есть
+   * соединение, и после перезапуска всё равно приходит заново в roster.
+   */
+  const [presence, setPresence] = useState<ReadonlyMap<string, Presence>>(new Map());
   /** Свёрнуто приложение или нет: уведомление показываем только когда свёрнуто. */
   const appActiveRef = useRef(true);
   const notificationsRef = useRef(false);
@@ -182,7 +199,12 @@ export function AppProvider({
 
       ws.events.on("state", (state) => {
         setConnectionState(state);
-        if (state !== "connected") return;
+        if (state !== "connected") {
+          // Без соединения мы не знаем, кто в сети: показывать прежнее «в сети»
+          // было бы обманом. Время последнего появления при этом сохраняем.
+          setPresence((prev) => new Map([...prev].map(([id, p]) => [id, { ...p, online: false }])));
+          return;
+        }
         setConnectionFailure(null);
         // Квитанции, не ушедшие из-за отсутствия связи, досылаем один раз при
         // подключении. Повторять их постоянно нельзя — именно это раньше и
@@ -196,7 +218,7 @@ export function AppProvider({
       ws.events.on("failure", setConnectionFailure);
 
       async function upsertAndTrack(member: RosterMemberPayload): Promise<Contact> {
-        const contact = contactFromRoster(crypto, member);
+        const contact = contactFromRoster(crypto, member, contactsRef.current.find((c) => c.userId === member.userId));
         await upsertContact(contact);
         // Ссылку обновляем синхронно, не дожидаясь перерисовки: сразу после
         // roster идёт запрос истории, и её расшифровка использует именно этот
@@ -212,6 +234,15 @@ export function AppProvider({
           for (const member of payload.members) {
             await upsertAndTrack(member);
           }
+          // Снимок присутствия приходит вместе со списком участников.
+          setPresence(
+            new Map(
+              payload.members.map((member) => [
+                member.userId,
+                { online: member.online === true, lastSeenAt: member.lastSeenAt ?? null },
+              ]),
+            ),
+          );
           // Синхронизация истории по всем личным чатам после (пере)подключения.
           for (const member of payload.members) {
             const chatId = dmChatId(identity.userId, member.userId);
@@ -222,6 +253,19 @@ export function AppProvider({
 
       ws.events.on("memberJoined", (member) => {
         void upsertAndTrack(member);
+      });
+
+      ws.events.on("presence", (payload) => {
+        setPresence((prev) => {
+          const next = new Map(prev);
+          next.set(payload.userId, {
+            online: payload.online,
+            // При уходе сервер присылает время, при появлении — null: тогда
+            // прежнее значение сохраняем, оно ещё может пригодиться.
+            lastSeenAt: payload.lastSeenAt ?? prev.get(payload.userId)?.lastSeenAt ?? null,
+          });
+          return next;
+        });
       });
 
       ws.events.on("memberUpdated", (payload) => {
@@ -252,7 +296,7 @@ export function AppProvider({
                   const sender = contactsRef.current.find((c) => c.userId === payload.fromUserId);
                   void showIncoming({
                     chatId: payload.chatId,
-                    title: sender?.displayName ?? "Новое сообщение",
+                    title: sender ? (sender.localName ?? sender.displayName) : "Новое сообщение",
                     body: describeForNotification(contentType, plaintext),
                   });
                 }
@@ -455,6 +499,13 @@ export function AppProvider({
         setDisplayName(trimmed);
         return true;
       },
+      async renameContact(userId, localName) {
+        const trimmed = localName?.trim() ?? "";
+        const value = trimmed.length === 0 ? null : trimmed.slice(0, 40);
+        await setContactLocalName(userId, value);
+        contactsRef.current = contactsRef.current.map((c) => (c.userId === userId ? { ...c, localName: value } : c));
+        setContacts(contactsRef.current);
+      },
       async setNotificationsEnabled(enabled) {
         notificationsRef.current = enabled;
         setNotificationsEnabled(enabled);
@@ -509,6 +560,7 @@ export function AppProvider({
       connectionState,
       connectionFailure,
       contacts,
+      presence,
       chatEvents,
       myFingerprint,
       notificationsEnabled,
@@ -520,6 +572,7 @@ export function AppProvider({
       connectionState,
       connectionFailure,
       contacts,
+      presence,
       chatEvents,
       myFingerprint,
       notificationsEnabled,

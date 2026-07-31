@@ -27,6 +27,44 @@ export interface LocalMediaMeta {
   height?: number;
 }
 
+/**
+ * Расширение по mime-типу. Без него Android не понимает, что за файл: и
+ * сохранение фото в галерею, и воспроизведение голосового, и «поделиться»
+ * молча не работали, потому что входящие файлы лежали под именем msgId вообще
+ * без расширения.
+ */
+const EXTENSION_BY_MIME: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "image/heic": "heic",
+  "audio/m4a": "m4a",
+  "audio/mp4": "m4a",
+  "audio/mpeg": "mp3",
+  "audio/aac": "aac",
+  "audio/ogg": "ogg",
+  "audio/wav": "wav",
+  "video/mp4": "mp4",
+  "application/pdf": "pdf",
+  "text/plain": "txt",
+};
+
+export function extensionFor(mimeType: string, fileName?: string): string {
+  const known = EXTENSION_BY_MIME[mimeType.toLowerCase()];
+  if (known) return known;
+  // У произвольного файла берём расширение из его имени.
+  const fromName = fileName?.match(/\.([a-zA-Z0-9]{1,8})$/);
+  if (fromName) return fromName[1]!.toLowerCase();
+  return "bin";
+}
+
+/** Имя файла в хранилище: стабильный идентификатор плюс расширение по типу. */
+export function localFileName(stableName: string, mimeType: string, fileName?: string): string {
+  return `${stableName}.${extensionFor(mimeType, fileName)}`;
+}
+
 function mediaDirectory(): Directory {
   const dir = new Directory(Paths.document, "media");
   if (!dir.exists) dir.create({ intermediates: true });
@@ -51,7 +89,7 @@ export function buildEnvelopeFromLocalFile(localUri: string, meta: Omit<LocalMed
 /** Разбирает пришедший конверт, пишет данные в постоянный файл и возвращает метаданные для локальной БД (без самих байт). */
 export function saveIncomingEnvelope(envelopeJson: string, stableName: string): LocalMediaMeta {
   const envelope = JSON.parse(envelopeJson) as MediaEnvelope;
-  const dest = new File(mediaDirectory(), stableName);
+  const dest = new File(mediaDirectory(), localFileName(stableName, envelope.mimeType, envelope.fileName));
   if (dest.exists) dest.delete();
   dest.create({ intermediates: true });
   dest.write(envelope.dataBase64, { encoding: "base64" });

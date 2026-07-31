@@ -14,6 +14,7 @@ import {
   type InviteRedeemOkPayload,
   type MemberJoinedPayload,
   type MemberUpdatedPayload,
+  type PresencePayload,
   type MsgAcceptedPayload,
   type MsgAckRelayPayload,
   type MsgDeletedPayload,
@@ -58,6 +59,7 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   roster: (payload: RosterSnapshotPayload) => void;
   memberJoined: (payload: MemberJoinedPayload) => void;
   memberUpdated: (payload: MemberUpdatedPayload) => void;
+  presence: (payload: PresencePayload) => void;
   msgDeliver: (payload: MsgDeliverPayload) => void;
   msgAccepted: (payload: MsgAcceptedPayload) => void;
   ackRelay: (payload: MsgAckRelayPayload) => void;
@@ -217,6 +219,9 @@ export class WsClient {
         return;
       case "member.updated":
         this.events.emit("memberUpdated", parsed.payload as MemberUpdatedPayload);
+        return;
+      case "presence":
+        this.events.emit("presence", parsed.payload as PresencePayload);
         return;
       case "msg.deliver":
         this.events.emit("msgDeliver", parsed.payload as MsgDeliverPayload);

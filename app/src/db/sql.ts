@@ -17,7 +17,10 @@ CREATE TABLE IF NOT EXISTS contacts (
   identity_public_key   TEXT NOT NULL,
   encryption_public_key TEXT NOT NULL,
   fingerprint           TEXT NOT NULL,
-  is_revoked            INTEGER NOT NULL DEFAULT 0
+  is_revoked            INTEGER NOT NULL DEFAULT 0,
+  -- Своё название контакта. Имя из roster задаёт сам человек, а подписать его
+  -- по-своему («Мама», «Паша с работы») — дело каждого и наружу не уходит.
+  local_name            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
