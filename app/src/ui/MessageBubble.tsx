@@ -1,10 +1,12 @@
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
+import * as Sharing from "expo-sharing";
 import React, { useEffect, useRef, useState } from "react";
 import { Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { formatFileSize, parseLocalMediaMeta } from "../chat/media";
 import type { LocalMessage } from "../db/messages";
 import type { Theme } from "../theme/theme";
 import { Icon, type IconName } from "./Icon";
+import { LinkedText } from "./LinkedText";
 
 /** Строка списка сообщений: само сообщение плюс всё, что вычислено заранее. */
 export interface Decorated {
@@ -158,10 +160,14 @@ function MessageContent({
   item,
   textColor,
   metaColor,
+  linkColor,
+  onOpenImage,
 }: {
   item: LocalMessage;
   textColor: string;
   metaColor: string;
+  linkColor: string;
+  onOpenImage: (uri: string) => void;
 }): React.ReactElement {
   if (item.deletedAt) {
     return <Text style={[styles.deletedText, { color: metaColor }]}>Сообщение удалено</Text>;
@@ -170,7 +176,12 @@ function MessageContent({
   if (item.contentType === "image") {
     const meta = parseLocalMediaMeta(item.plaintext);
     if (!meta) return <Text style={[styles.bubbleText, { color: textColor }]}>Фото недоступно</Text>;
-    return <Image source={{ uri: meta.localUri }} style={styles.image} resizeMode="cover" />;
+    const localUri = meta.localUri;
+    return (
+      <Pressable onPress={() => onOpenImage(localUri)}>
+        <Image source={{ uri: localUri }} style={styles.image} resizeMode="cover" />
+      </Pressable>
+    );
   }
 
   if (item.contentType === "voice") {
@@ -184,8 +195,9 @@ function MessageContent({
   if (item.contentType === "file") {
     const meta = parseLocalMediaMeta(item.plaintext);
     if (!meta) return <Text style={[styles.bubbleText, { color: textColor }]}>Файл недоступен</Text>;
+    const fileUri = meta.localUri;
     return (
-      <View style={styles.fileRow}>
+      <Pressable style={styles.fileRow} onPress={() => void shareFile(fileUri)}>
         <View style={[styles.fileIconCircle, { borderColor: metaColor }]}>
           <Icon name="file" size={19} color={textColor} />
         </View>
@@ -195,7 +207,8 @@ function MessageContent({
           </Text>
           <Text style={[styles.fileSize, { color: metaColor }]}>{formatFileSize(meta.sizeBytes)}</Text>
         </View>
-      </View>
+        <Icon name="share" size={17} color={metaColor} />
+      </Pressable>
     );
   }
 
@@ -215,11 +228,18 @@ function MessageContent({
     );
   }
 
-  return (
-    <Text style={[styles.bubbleText, { color: item.plaintext === null ? metaColor : textColor }]}>
-      {item.plaintext ?? "Не удалось расшифровать сообщение"}
-    </Text>
-  );
+  if (item.plaintext === null) {
+    return <Text style={[styles.bubbleText, { color: metaColor }]}>Не удалось расшифровать сообщение</Text>;
+  }
+  return <LinkedText text={item.plaintext} style={[styles.bubbleText, { color: textColor }]} linkColor={linkColor} />;
+}
+
+async function shareFile(uri: string): Promise<void> {
+  try {
+    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri);
+  } catch {
+    // Нечем открыть — молча ничего не делаем, ронять чат из-за этого незачем.
+  }
 }
 
 function parseCoords(raw: string | null): { lat: number; lng: number } | null {
@@ -237,9 +257,10 @@ interface BubbleProps {
   mine: boolean;
   theme: Theme;
   onLongPress: (message: LocalMessage) => void;
+  onOpenImage: (uri: string) => void;
 }
 
-function MessageBubbleBase({ row, mine, theme, onLongPress }: BubbleProps): React.ReactElement {
+function MessageBubbleBase({ row, mine, theme, onLongPress, onOpenImage }: BubbleProps): React.ReactElement {
   const { message, showDay, tail, groupStart, replyAuthor, replyPreview } = row;
   const textColor = mine ? theme.colors.bubbleMineText : theme.colors.bubbleTheirsText;
   const metaColor = mine ? theme.colors.bubbleMineMeta : theme.colors.bubbleTheirsMeta;
@@ -294,7 +315,14 @@ function MessageBubbleBase({ row, mine, theme, onLongPress }: BubbleProps): Reac
           </View>
         )}
 
-        <MessageContent item={message} textColor={textColor} metaColor={metaColor} />
+        <MessageContent
+          item={message}
+          textColor={textColor}
+          metaColor={metaColor}
+          // В своём пузыре акцент — это фон, ссылка на нём была бы не видна.
+          linkColor={mine ? theme.colors.bubbleMineText : theme.colors.accent}
+          onOpenImage={onOpenImage}
+        />
 
         <View style={[styles.metaRow, isImage && styles.metaRowOnImage]}>
           <Text style={[styles.time, { color: metaColor }]}>{formatTime(message.createdAt)}</Text>
@@ -321,6 +349,7 @@ export const MessageBubble = React.memo(MessageBubbleBase, (a, b) => {
     a.mine === b.mine &&
     a.theme === b.theme &&
     a.onLongPress === b.onLongPress &&
+    a.onOpenImage === b.onOpenImage &&
     a.row.showDay === b.row.showDay &&
     a.row.tail === b.row.tail &&
     a.row.groupStart === b.row.groupStart &&

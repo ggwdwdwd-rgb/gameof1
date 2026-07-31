@@ -43,6 +43,10 @@ export interface MsgAckPayload {
   status: "delivered" | "read";
 }
 
+export interface ProfileUpdatePayload {
+  displayName: string;
+}
+
 export interface TypingPayload {
   chatId: string;
   isTyping: boolean;

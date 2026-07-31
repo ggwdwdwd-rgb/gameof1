@@ -267,6 +267,21 @@ const foreignRejected = await bob.wait(
 );
 check("чужой чат отклонён", Boolean(foreignRejected.payload.code), foreignRejected.payload.code);
 
+// ── 8b. Переименование участника ────────────────────────────────────────────
+bob.send("profile.update", { displayName: "Боб Новый" });
+const renamed = await alice.wait("member.updated", (m) => m.payload.userId === bob.userId);
+check("смена имени доходит до остальных", renamed.payload.displayName === "Боб Новый", renamed.payload.displayName);
+const selfRenamed = await bob.wait("member.updated", (m) => m.payload.userId === bob.userId);
+check("автор тоже получает подтверждение", selfRenamed.payload.displayName === "Боб Новый");
+
+bob.send("profile.update", { displayName: "   " });
+const badName = await bob.wait("error", (m) => m.payload.code === "BAD_NAME");
+check("пустое имя отклонено", badName.payload.code === "BAD_NAME");
+
+bob.send("profile.update", { displayName: "х".repeat(41) });
+const longName = await bob.wait("error", (m) => m.payload.code === "BAD_NAME", 5000);
+check("слишком длинное имя отклонено", Boolean(longName));
+
 // ── 9. Незнакомое устройство получает внятный отказ ──────────────────────────
 // Это ровно тот случай, который в приложении выглядел как «нет соединения»:
 // сокет открывается, но сервер не признаёт устройство.

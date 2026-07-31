@@ -20,13 +20,23 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS",
+        "VIBRATE",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      ["react-native-libsodium", {}],
+      [
+        "react-native-libsodium",
+        {}
+      ],
       [
         "expo-camera",
         {
@@ -51,6 +61,21 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Геолокация нужна, чтобы один раз отправить её в чат кнопкой «я тут»."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#d97757",
+          "defaultChannel": "messages"
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Доступ к фото нужен, чтобы сохранять полученные изображения в галерею.",
+          "savePhotosPermission": "Разрешение нужно, чтобы сохранить фото из чата в галерею.",
+          "isAccessMediaLocationEnabled": false
         }
       ]
     ]

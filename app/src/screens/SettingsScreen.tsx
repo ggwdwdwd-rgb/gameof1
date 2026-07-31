@@ -1,5 +1,5 @@
-import React from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { describeFailure, useApp } from "../context/AppContext";
 import { useTheme, useThemePreference } from "../theme/ThemeContext";
@@ -7,6 +7,7 @@ import type { ThemePreference } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
 import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
+import { getPermissionState, requestPermission } from "../notify/notifications";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: IconName }[] = [
   { value: "light", label: "Светлая", icon: "sun" },
@@ -30,7 +31,18 @@ function Card({ children }: { children: React.ReactNode }): React.ReactElement {
 }
 
 export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactElement {
-  const { identity, contacts, myFingerprint, connectionState, connectionFailure, reconnect } = useApp();
+  const {
+    identity,
+    contacts,
+    myFingerprint,
+    connectionState,
+    connectionFailure,
+    reconnect,
+    displayName,
+    notificationsEnabled,
+    setNotificationsEnabled,
+    renameSelf,
+  } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const { preference, setPreference } = useThemePreference();
@@ -38,14 +50,116 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
   const activeContacts = contacts.filter((c) => !c.isRevoked);
   const connected = connectionState === "connected";
 
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(displayName);
+  const [savingName, setSavingName] = useState(false);
+  /** Разрешение на уведомления могло быть отозвано в настройках телефона. */
+  const [permissionDenied, setPermissionDenied] = useState(false);
+
+  useEffect(() => {
+    void getPermissionState().then((state) => setPermissionDenied(state === "denied"));
+  }, []);
+
+  const handleSaveName = useCallback(async () => {
+    setSavingName(true);
+    try {
+      if (await renameSelf(nameDraft)) {
+        setEditingName(false);
+        return;
+      }
+      Alert.alert(
+        "Имя не сохранено",
+        nameDraft.trim().length === 0 || nameDraft.trim().length > 40
+          ? "Имя должно быть от 1 до 40 символов."
+          : "Нужно соединение с сервером: имя видят остальные участники, поэтому оно меняется сразу у всех.",
+      );
+    } finally {
+      setSavingName(false);
+    }
+  }, [nameDraft, renameSelf]);
+
+  const handleToggleNotifications = useCallback(
+    async (next: boolean) => {
+      if (!next) {
+        await setNotificationsEnabled(false);
+        return;
+      }
+      const state = await requestPermission();
+      if (state !== "granted") {
+        setPermissionDenied(state === "denied");
+        Alert.alert(
+          "Нет разрешения на уведомления",
+          "Разрешите уведомления для Cry в настройках телефона — без этого показать их нельзя.",
+        );
+        return;
+      }
+      setPermissionDenied(false);
+      await setNotificationsEnabled(true);
+    },
+    [setNotificationsEnabled],
+  );
+
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <Header title="Настройки" onBack={onBack} />
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
         <View style={styles.profileHead}>
-          <Avatar name={identity.displayName} seed={identity.userId} size={78} />
-          <Text style={[styles.profileName, { color: theme.colors.textPrimary }]}>{identity.displayName}</Text>
+          <Avatar name={displayName} seed={identity.userId} size={78} />
+
+          {editingName ? (
+            <View style={styles.nameEditor}>
+              <TextInput
+                style={[
+                  styles.nameInput,
+                  {
+                    color: theme.colors.textPrimary,
+                    borderColor: theme.colors.border,
+                    backgroundColor: theme.colors.surface,
+                  },
+                ]}
+                value={nameDraft}
+                onChangeText={setNameDraft}
+                maxLength={40}
+                autoFocus
+                editable={!savingName}
+                placeholder="Как вас видят остальные"
+                placeholderTextColor={theme.colors.textMuted}
+              />
+              <View style={styles.nameActions}>
+                <Pressable
+                  style={styles.nameAction}
+                  onPress={() => {
+                    setNameDraft(displayName);
+                    setEditingName(false);
+                  }}
+                  disabled={savingName}
+                >
+                  <Text style={[styles.nameActionText, { color: theme.colors.textSecondary }]}>Отмена</Text>
+                </Pressable>
+                <Pressable style={styles.nameAction} onPress={() => void handleSaveName()} disabled={savingName}>
+                  {savingName ? (
+                    <ActivityIndicator color={theme.colors.accent} />
+                  ) : (
+                    <Text style={[styles.nameActionText, { color: theme.colors.accent }]}>Сохранить</Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <Pressable
+              style={styles.nameRow}
+              onPress={() => {
+                setNameDraft(displayName);
+                setEditingName(true);
+              }}
+              hitSlop={8}
+            >
+              <Text style={[styles.profileName, { color: theme.colors.textPrimary }]}>{displayName}</Text>
+              <Icon name="edit" size={17} color={theme.colors.textMuted} />
+            </Pressable>
+          )}
+
           <View style={styles.profileStatus}>
             <View
               style={[styles.statusDot, { backgroundColor: connected ? theme.colors.success : theme.colors.textMuted }]}
@@ -78,6 +192,34 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
               </Pressable>
             );
           })}
+        </Card>
+
+        <SectionTitle>Уведомления</SectionTitle>
+        <Card>
+          <View style={styles.row}>
+            <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+              <Icon name="bell" size={19} color={theme.colors.accent} />
+            </View>
+            <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Новые сообщения</Text>
+            <Switch
+              value={notificationsEnabled}
+              onValueChange={(next) => void handleToggleNotifications(next)}
+              trackColor={{ true: theme.colors.accent, false: theme.colors.border }}
+              thumbColor={theme.colors.surface}
+            />
+          </View>
+          <View style={[styles.block, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider }]}>
+            <Text style={[styles.hint, { color: theme.colors.textMuted, marginTop: 0 }]}>
+              Уведомление показывает само приложение, когда получает сообщение — сервер о содержимом не знает. Пока Cry
+              свёрнут, соединение живёт и уведомления приходят; если система выгрузит приложение из памяти, сообщения
+              появятся при следующем открытии.
+            </Text>
+            {permissionDenied && (
+              <Text style={[styles.failure, { color: theme.colors.danger }]}>
+                Уведомления запрещены в настройках телефона — включить их из приложения нельзя.
+              </Text>
+            )}
+          </View>
         </Card>
 
         <SectionTitle>Безопасность</SectionTitle>
@@ -158,7 +300,20 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { padding: 16 },
   profileHead: { alignItems: "center", paddingTop: 14, paddingBottom: 8 },
-  profileName: { fontSize: 22, fontWeight: "700", marginTop: 14, letterSpacing: -0.4 },
+  nameRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 14 },
+  profileName: { fontSize: 22, fontWeight: "700", letterSpacing: -0.4 },
+  nameEditor: { alignSelf: "stretch", marginTop: 14 },
+  nameInput: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 13,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 17,
+    textAlign: "center",
+  },
+  nameActions: { flexDirection: "row", justifyContent: "center", gap: 18, marginTop: 10 },
+  nameAction: { paddingVertical: 8, paddingHorizontal: 12, minWidth: 90, alignItems: "center" },
+  nameActionText: { fontSize: 15, fontWeight: "600" },
   profileStatus: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 5 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   profileStatusText: { fontSize: 13.5 },

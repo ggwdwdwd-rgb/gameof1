@@ -94,6 +94,20 @@ check("во втором чате последнее — in5", last.get(CHAT_B)?
 add("in6", CHAT_B, "b", "delivered", 2700, 2750);
 check("удалённое не попадает в превью", lastStmt.all().find((r) => r.chat_id === CHAT_B)?.id === "in5");
 
+// ── Очередь неотправленных квитанций ───────────────────────────────────────
+const queueAck = db.prepare(
+  `INSERT INTO pending_acks (msg_id, chat_id, status) VALUES (?, ?, ?)
+   ON CONFLICT(msg_id) DO UPDATE SET status = excluded.status, chat_id = excluded.chat_id`,
+);
+queueAck.run("in1", CHAT_A, "delivered");
+queueAck.run("in1", CHAT_A, "read"); // та же квитанция «повзрослела»
+queueAck.run("in2", CHAT_A, "read");
+const pending = db.prepare("SELECT msg_id, status FROM pending_acks ORDER BY msg_id").all();
+check("очередь квитанций не дублирует сообщения", pending.length === 2, String(pending.length));
+check("повторная запись обновляет статус", pending[0].status === "read", pending[0].status);
+db.prepare("DELETE FROM pending_acks WHERE msg_id = ?").run("in1");
+check("отправленная квитанция убирается из очереди", db.prepare("SELECT COUNT(*) AS n FROM pending_acks").get().n === 1);
+
 // ── Пустая база ────────────────────────────────────────────────────────────
 const empty = freshDb();
 check("на пустой базе последние сообщения — пусто", empty.prepare(SELECT_LAST_MESSAGES).all().length === 0);

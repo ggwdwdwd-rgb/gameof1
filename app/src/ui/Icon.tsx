@@ -29,6 +29,10 @@ export type IconName =
   | "moon"
   | "contrast"
   | "share"
+  | "download"
+  | "copy"
+  | "edit"
+  | "bell"
   | "refresh"
   | "qr"
   | "camera";
@@ -196,6 +200,35 @@ function renderPaths(name: IconName, c: CommonProps, color: string): React.React
           <Path {...c} d="M12 15.6V3.8" />
           <Polyline {...c} points="7.6 8.2 12 3.7 16.4 8.2" />
           <Path {...c} d="M5.2 14.4v3.9a2.2 2.2 0 0 0 2.2 2.2h9.2a2.2 2.2 0 0 0 2.2-2.2v-3.9" />
+        </>
+      );
+    case "download":
+      return (
+        <>
+          <Path {...c} d="M12 3.6v11.8" />
+          <Polyline {...c} points="7.6 11 12 15.5 16.4 11" />
+          <Path {...c} d="M5.2 17.2v1.2a2.2 2.2 0 0 0 2.2 2.2h9.2a2.2 2.2 0 0 0 2.2-2.2v-1.2" />
+        </>
+      );
+    case "copy":
+      return (
+        <>
+          <Rect {...c} x="9" y="9" width="11.4" height="11.4" rx="2.6" />
+          <Path {...c} d="M15 6.2V5.8A2.2 2.2 0 0 0 12.8 3.6H6.2A2.6 2.6 0 0 0 3.6 6.2v6.6A2.2 2.2 0 0 0 5.8 15h.4" />
+        </>
+      );
+    case "edit":
+      return (
+        <>
+          <Path {...c} d="M4.4 19.6h3.2L19.2 8a2.26 2.26 0 0 0-3.2-3.2L4.4 16.4z" />
+          <Path {...c} d="M14.6 6.2l3.2 3.2" />
+        </>
+      );
+    case "bell":
+      return (
+        <>
+          <Path {...c} d="M6.2 10.4a5.8 5.8 0 0 1 11.6 0c0 4 1.6 5.4 1.6 5.4H4.6s1.6-1.4 1.6-5.4z" />
+          <Path {...c} d="M10.1 19.2a2.1 2.1 0 0 0 3.8 0" />
         </>
       );
     case "refresh":

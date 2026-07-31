@@ -81,24 +81,34 @@ function ComposerBase({
     void action();
   }, []);
 
-  const handleStartRecording = useCallback(async () => {
+  /**
+   * Запись включается и выключается нажатием, а не удержанием.
+   *
+   * С удержанием она не работала вовсе: системный диалог разрешения забирал
+   * фокус, палец «отпускался», onPressOut срабатывал сразу — и остановка
+   * приходила раньше старта. Плюс нажатие честнее: держать палец минуту,
+   * записывая длинное сообщение, неудобно.
+   */
+  const handleToggleRecording = useCallback(async () => {
+    if (recorderState.isRecording) {
+      const durationMs = recorderState.durationMillis;
+      await recorder.stop();
+      const uri = recorder.uri;
+      if (uri) void onVoiceRecorded(uri, durationMs);
+      return;
+    }
+
     const permission = await requestRecordingPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("Нет доступа к микрофону", "Разрешите доступ в настройках устройства.");
+      Alert.alert(
+        "Нет доступа к микрофону",
+        "Разрешите доступ к микрофону в настройках устройства — без него голосовые записать нельзя.",
+      );
       return;
     }
     await setAudioModeAsync({ allowsRecording: true });
     await recorder.prepareToRecordAsync();
     recorder.record();
-  }, [recorder]);
-
-  const handleStopRecording = useCallback(async () => {
-    if (!recorderState.isRecording) return;
-    const durationMs = recorderState.durationMillis;
-    await recorder.stop();
-    const uri = recorder.uri;
-    if (!uri) return;
-    void onVoiceRecorded(uri, durationMs);
   }, [onVoiceRecorded, recorder, recorderState.durationMillis, recorderState.isRecording]);
 
   const hasDraft = draft.trim().length > 0;
@@ -154,9 +164,14 @@ function ComposerBase({
             style={[styles.input, { color: theme.colors.textPrimary }]}
             value={draft}
             onChangeText={handleDraftChange}
-            placeholder={recorderState.isRecording ? "Записываю…" : "Сообщение"}
+            placeholder={
+              recorderState.isRecording
+                ? `Записываю… ${Math.floor(recorderState.durationMillis / 1000)} с — нажмите ✓`
+                : "Сообщение"
+            }
             placeholderTextColor={theme.colors.textMuted}
             multiline
+            editable={!recorderState.isRecording}
           />
         </View>
 
@@ -179,10 +194,9 @@ function ComposerBase({
                 transform: [{ scale: recorderState.isRecording ? 1.08 : 1 }],
               },
             ]}
-            onPressIn={() => void handleStartRecording()}
-            onPressOut={() => void handleStopRecording()}
+            onPress={() => void handleToggleRecording()}
           >
-            <Icon name="mic" size={21} color={theme.colors.onAccent} />
+            <Icon name={recorderState.isRecording ? "check" : "mic"} size={21} color={theme.colors.onAccent} />
           </Pressable>
         )}
       </View>

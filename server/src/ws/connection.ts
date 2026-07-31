@@ -8,6 +8,7 @@ import { handleInviteRedeem } from "./handlers/invite.js";
 import { createInvite } from "../invites.js";
 import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from "./handlers/message.js";
 import { getRosterExcluding } from "./handlers/roster.js";
+import { updateDisplayName } from "./handlers/profile.js";
 import {
   broadcastToAllExcept,
   registerConnection,
@@ -25,6 +26,7 @@ import {
   type MsgAckPayload,
   type MsgDeletePayload,
   type MsgSendPayload,
+  type ProfileUpdatePayload,
   type TypingPayload,
 } from "./types.js";
 
@@ -176,6 +178,20 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           sendToDevice(recipientDeviceId, envelope("msg.deleted", { msgId: payload.msgId, chatId: result.chatId, byUserId: userId }));
         }
         send(socket, envelope("msg.deleted", { msgId: payload.msgId, chatId: result.chatId, byUserId: userId }));
+        return;
+      }
+
+      if (parsed.type === "profile.update") {
+        const payload = parsed.payload as ProfileUpdatePayload;
+        const displayName = updateDisplayName(userId, payload.displayName);
+        if (displayName === null) {
+          send(socket, envelope("error", { code: "BAD_NAME", message: "Имя должно быть от 1 до 40 символов" }));
+          return;
+        }
+        // Имя видят все участники, поэтому рассылаем всем, включая другие
+        // устройства автора.
+        broadcastToAllExcept(null, envelope("member.updated", { userId, displayName }));
+        log.info({ userId }, "участник сменил имя");
         return;
       }
 

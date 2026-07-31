@@ -1,6 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, BackHandler, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppProvider } from "./src/context/AppContext";
 import { AddPersonScreen } from "./src/screens/AddPersonScreen";
@@ -30,6 +30,17 @@ function Root(): React.ReactElement {
       setLoading(false);
     });
   }, []);
+
+  // Аппаратная кнопка «назад» закрывает открытый экран, а не приложение.
+  // Без обработчика Android выходил из Cry прямо из чата или настроек.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (screen.name === "chatList") return false; // из списка чатов — выход, как и ожидается
+      setScreen({ name: "chatList" });
+      return true;
+    });
+    return () => subscription.remove();
+  }, [screen.name]);
 
   if (loading) {
     return (

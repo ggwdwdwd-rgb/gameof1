@@ -26,7 +26,8 @@ export function send(socket: WebSocket, envelope: Envelope): void {
   }
 }
 
-export function broadcastToAllExcept(excludeDeviceId: string, envelope: Envelope): void {
+/** excludeDeviceId = null — отправить всем, включая другие устройства автора. */
+export function broadcastToAllExcept(excludeDeviceId: string | null, envelope: Envelope): void {
   for (const conn of connections.values()) {
     if (conn.deviceId === excludeDeviceId) continue;
     send(conn.socket, envelope);

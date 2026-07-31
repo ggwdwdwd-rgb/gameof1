@@ -13,6 +13,7 @@ import {
   type InviteRedeemErrorPayload,
   type InviteRedeemOkPayload,
   type MemberJoinedPayload,
+  type MemberUpdatedPayload,
   type MsgAcceptedPayload,
   type MsgAckRelayPayload,
   type MsgDeletedPayload,
@@ -56,6 +57,7 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   inviteCreated: (payload: InviteCreatedPayload) => void;
   roster: (payload: RosterSnapshotPayload) => void;
   memberJoined: (payload: MemberJoinedPayload) => void;
+  memberUpdated: (payload: MemberUpdatedPayload) => void;
   msgDeliver: (payload: MsgDeliverPayload) => void;
   msgAccepted: (payload: MsgAcceptedPayload) => void;
   ackRelay: (payload: MsgAckRelayPayload) => void;
@@ -127,8 +129,16 @@ export class WsClient {
     this.trySendRaw(envelope);
   }
 
-  ackMessage(msgId: string, chatId: string, status: "delivered" | "read"): void {
-    if (this.ws) this.rawSend(this.ws, "msg.ack", { msgId, chatId, status });
+  /** false, если квитанцию не удалось отправить — её надо запомнить и повторить. */
+  ackMessage(msgId: string, chatId: string, status: "delivered" | "read"): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "msg.ack", { msgId, chatId, status });
+  }
+
+  /** Смена своего отображаемого имени. false, если пакет не ушёл. */
+  updateProfile(displayName: string): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "profile.update", { displayName });
   }
 
   /**
@@ -204,6 +214,9 @@ export class WsClient {
         return;
       case "member.joined":
         this.events.emit("memberJoined", parsed.payload as MemberJoinedPayload);
+        return;
+      case "member.updated":
+        this.events.emit("memberUpdated", parsed.payload as MemberUpdatedPayload);
         return;
       case "msg.deliver":
         this.events.emit("msgDeliver", parsed.payload as MsgDeliverPayload);

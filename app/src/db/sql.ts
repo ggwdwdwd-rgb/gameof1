@@ -43,6 +43,15 @@ CREATE TABLE IF NOT EXISTS outbox (
   created_at     INTEGER NOT NULL
 );
 
+-- Квитанции, которые не удалось отправить (не было связи). Повторяются после
+-- переподключения. Раньше их просто теряли, и у собеседника сообщение навсегда
+-- оставалось «доставлено» вместо «прочитано».
+CREATE TABLE IF NOT EXISTS pending_acks (
+  msg_id   TEXT PRIMARY KEY,
+  chat_id  TEXT NOT NULL,
+  status   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sync_state (
   chat_id       TEXT PRIMARY KEY,
   last_synced_ts INTEGER NOT NULL DEFAULT 0

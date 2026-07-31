@@ -98,6 +98,16 @@ export interface MsgAckRelayPayload {
   ts: number;
 }
 
+export interface ProfileUpdatePayload {
+  displayName: string;
+}
+
+/** Сервер рассылает всем, когда участник сменил имя. */
+export interface MemberUpdatedPayload {
+  userId: string;
+  displayName: string;
+}
+
 export interface TypingPayload {
   chatId: string;
   isTyping: boolean;

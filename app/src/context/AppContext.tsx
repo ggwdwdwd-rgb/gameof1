@@ -12,12 +12,16 @@ import {
   updateMessageStatus,
   type LocalMessage,
 } from "../db/messages";
+import { listPendingAcks, queueAck, removePendingAck } from "../db/pendingAcks";
+import { getSetting, setSetting } from "../db/settings";
 import { getLastSyncedTs, setLastSyncedTs } from "../db/syncState";
+import { describeForNotification, dismissChat, showIncoming } from "../notify/notifications";
 import { decryptDeliveredMessage, encryptForChat } from "../chat/encryption";
 import { dmChatId } from "../chat/chatId";
 import { saveIncomingEnvelope, type LocalMediaMeta } from "../chat/media";
 import { WsClient, type ConnectionFailure, type ConnectionState } from "../net/wsClient";
 import type { InviteCreatedPayload, MsgDeliverPayload, RosterMemberPayload } from "../net/protocol";
+import { saveIdentity } from "../storage/identity";
 import type { DeviceIdentity } from "../storage/identity";
 import { Emitter } from "../util/emitter";
 import { uuidv4 } from "../util/uuid";
@@ -28,6 +32,8 @@ const MEDIA_CONTENT_TYPES = new Set(["image", "voice", "file"]);
 
 /** Собеседник считается печатающим не дольше этого времени — страховка от «зависшего» индикатора. */
 const TYPING_EXPIRY_MS = 6_000;
+
+const NOTIFICATIONS_SETTING = "notifications_enabled";
 
 /** Сколько ждём готовности соединения там, где без сервера операция невозможна (создание инвайта). */
 const WAIT_READY_MS = 10_000;
@@ -72,6 +78,10 @@ interface AppContextData {
   contacts: Contact[];
   chatEvents: Emitter<ChatEvents>;
   myFingerprint: string;
+  /** Показывать ли уведомления о сообщениях, пришедших пока приложение свёрнуто. */
+  notificationsEnabled: boolean;
+  /** Имя, которым участника видят остальные (может измениться без перезапуска). */
+  displayName: string;
 }
 
 /** Действия: их идентичность не меняется, поэтому эффекты экранов стабильны. */
@@ -92,6 +102,10 @@ interface AppActions {
   loadMessages: (chatId: string) => Promise<LocalMessage[]>;
   createInvite: () => Promise<CreateInviteResult>;
   reconnect: () => void;
+  /** Смена своего имени: локально, на сервере и у остальных участников. */
+  renameSelf: (displayName: string) => Promise<boolean>;
+  /** Включение и выключение уведомлений о новых сообщениях. */
+  setNotificationsEnabled: (enabled: boolean) => Promise<void>;
 }
 
 type AppContextValue = AppContextData & AppActions;
@@ -127,6 +141,11 @@ export function AppProvider({
   const [connectionFailure, setConnectionFailure] = useState<ConnectionFailure | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [myFingerprint, setMyFingerprint] = useState("");
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [displayName, setDisplayName] = useState(identity.displayName);
+  /** Свёрнуто приложение или нет: уведомление показываем только когда свёрнуто. */
+  const appActiveRef = useRef(true);
+  const notificationsRef = useRef(false);
   const cryptoRef = useRef<Crypto | null>(null);
   const wsRef = useRef<WsClient | null>(null);
   const contactsRef = useRef<Contact[]>([]);
@@ -145,6 +164,10 @@ export function AppProvider({
       cryptoRef.current = crypto;
       setMyFingerprint(crypto.computeFingerprint(identity.identityPublicKey));
 
+      const storedNotifications = (await getSetting(NOTIFICATIONS_SETTING)) === "1";
+      notificationsRef.current = storedNotifications;
+      if (!cancelled) setNotificationsEnabled(storedNotifications);
+
       const storedContacts = await listContacts();
       if (cancelled) return;
       contactsRef.current = storedContacts;
@@ -159,7 +182,16 @@ export function AppProvider({
 
       ws.events.on("state", (state) => {
         setConnectionState(state);
-        if (state === "connected") setConnectionFailure(null);
+        if (state !== "connected") return;
+        setConnectionFailure(null);
+        // Квитанции, не ушедшие из-за отсутствия связи, досылаем один раз при
+        // подключении. Повторять их постоянно нельзя — именно это раньше и
+        // создавало поток лишних пакетов.
+        void (async () => {
+          for (const ack of await listPendingAcks()) {
+            if (ws.ackMessage(ack.msgId, ack.chatId, ack.status)) await removePendingAck(ack.msgId);
+          }
+        })();
       });
       ws.events.on("failure", setConnectionFailure);
 
@@ -192,9 +224,39 @@ export function AppProvider({
         void upsertAndTrack(member);
       });
 
+      ws.events.on("memberUpdated", (payload) => {
+        if (payload.userId === identity.userId) {
+          setDisplayName(payload.displayName);
+          return;
+        }
+        const existing = contactsRef.current.find((c) => c.userId === payload.userId);
+        if (!existing) return;
+        void upsertAndTrack({
+          userId: existing.userId,
+          deviceId: existing.deviceId,
+          displayName: payload.displayName,
+          identityPublicKey: existing.identityPublicKey,
+          encryptionPublicKey: existing.encryptionPublicKey,
+          joinedAt: 0,
+        });
+      });
+
       ws.events.on("msgDeliver", (payload) => {
         void handleIncomingMessage(crypto, ws, identity, payload, chatEvents, {
           contacts: contactsRef.current,
+          // Уведомление показываем только для чужих сообщений и только когда
+          // приложение свёрнуто: внутри чата оно и так видно.
+          notify:
+            notificationsRef.current && !appActiveRef.current && payload.fromUserId !== identity.userId
+              ? (contentType, plaintext) => {
+                  const sender = contactsRef.current.find((c) => c.userId === payload.fromUserId);
+                  void showIncoming({
+                    chatId: payload.chatId,
+                    title: sender?.displayName ?? "Новое сообщение",
+                    body: describeForNotification(contentType, plaintext),
+                  });
+                }
+              : undefined,
         });
       });
 
@@ -273,6 +335,7 @@ export function AppProvider({
     // не прийти. Поэтому при каждом возврате в приложение проверяем связь и,
     // если её нет, переподключаемся сразу, не дожидаясь backoff-таймера.
     const appStateSub = AppState.addEventListener("change", (nextState) => {
+      appActiveRef.current = nextState === "active";
       if (nextState !== "active") return;
       const ws = wsRef.current;
       if (ws && !ws.isReady()) ws.forceReconnect();
@@ -350,14 +413,22 @@ export function AppProvider({
         wsRef.current?.deleteMessage(msgId, chatId);
       },
       async markChatRead(chatId) {
+        // Уведомления этого чата больше не нужны — пользователь его открыл.
+        void dismissChat(chatId);
+
         const changed = await markChatRead(chatId, identity.userId);
         if (changed.length === 0) return;
-        // Локально помечаем всегда, чтобы счётчик непрочитанного в списке чатов
-        // гас сразу при открытии чата. Квитанции уходят «по возможности»: если
-        // связи нет, собеседник просто не увидит вторую галочку — повторять их
-        // при каждом переподключении нельзя, иначе вернётся поток событий.
+
+        // Локально помечаем всегда, чтобы счётчик непрочитанного гас сразу при
+        // открытии чата. Квитанции, которые не ушли (нет связи), кладём в
+        // очередь и досылаем при подключении — иначе у собеседника сообщение
+        // навсегда осталось бы «доставлено» вместо «прочитано».
         const ws = wsRef.current;
-        for (const msgId of changed) ws?.ackMessage(msgId, chatId, "read");
+        for (const msgId of changed) {
+          if (!ws?.ackMessage(msgId, chatId, "read")) {
+            await queueAck({ msgId, chatId, status: "read" });
+          }
+        }
         chatEvents.emit("messageStatusChanged", chatId, changed[0]!);
       },
       setTyping(chatId, isTyping) {
@@ -366,6 +437,28 @@ export function AppProvider({
       loadMessages: (chatId) => listMessagesForChat(chatId),
       reconnect() {
         wsRef.current?.forceReconnect();
+      },
+      async renameSelf(nextName) {
+        const trimmed = nextName.trim();
+        if (trimmed.length === 0 || trimmed.length > 40) return false;
+
+        const ws = wsRef.current;
+        // Имя видят остальные, поэтому без связи менять его нельзя: иначе у
+        // разных людей будут разные имена одного человека.
+        if (!ws || !(await ws.waitUntilReady(WAIT_READY_MS)) || !ws.updateProfile(trimmed)) return false;
+
+        // Локально сохраняем сразу: подтверждение придёт пакетом member.updated,
+        // но ждать его на экране незачем.
+        // В хранилище — чтобы имя сохранилось после перезапуска; в состояние —
+        // чтобы экраны увидели его сразу. Сам объект identity не мутируем.
+        await saveIdentity({ ...identity, displayName: trimmed });
+        setDisplayName(trimmed);
+        return true;
+      },
+      async setNotificationsEnabled(enabled) {
+        notificationsRef.current = enabled;
+        setNotificationsEnabled(enabled);
+        await setSetting(NOTIFICATIONS_SETTING, enabled ? "1" : "0");
       },
       async createInvite() {
         const ws = wsRef.current;
@@ -411,8 +504,28 @@ export function AppProvider({
   }, [identity, chatEvents]);
 
   const value = useMemo<AppContextValue>(
-    () => ({ identity, connectionState, connectionFailure, contacts, chatEvents, myFingerprint, ...actions }),
-    [identity, connectionState, connectionFailure, contacts, chatEvents, myFingerprint, actions],
+    () => ({
+      identity,
+      connectionState,
+      connectionFailure,
+      contacts,
+      chatEvents,
+      myFingerprint,
+      notificationsEnabled,
+      displayName,
+      ...actions,
+    }),
+    [
+      identity,
+      connectionState,
+      connectionFailure,
+      contacts,
+      chatEvents,
+      myFingerprint,
+      notificationsEnabled,
+      displayName,
+      actions,
+    ],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
@@ -425,7 +538,12 @@ async function handleIncomingMessage(
   identity: DeviceIdentity,
   payload: MsgDeliverPayload,
   chatEvents: Emitter<ChatEvents>,
-  options: { skipAck?: boolean; silent?: boolean; contacts?: Contact[] } = {},
+  options: {
+    skipAck?: boolean;
+    silent?: boolean;
+    contacts?: Contact[];
+    notify?: (contentType: string, plaintext: string | null) => void;
+  } = {},
 ): Promise<boolean> {
   if (await messageExists(payload.msgId)) return false;
 
@@ -455,9 +573,12 @@ async function handleIncomingMessage(
     deletedAt: null,
   });
   if (!options.silent) chatEvents.emit("messageInserted", payload.chatId);
+  options.notify?.(payload.contentType, plaintext);
 
   if (!options.skipAck && payload.fromUserId !== identity.userId) {
-    ws.ackMessage(payload.msgId, payload.chatId, "delivered");
+    if (!ws.ackMessage(payload.msgId, payload.chatId, "delivered")) {
+      await queueAck({ msgId: payload.msgId, chatId: payload.chatId, status: "delivered" });
+    }
   }
   return true;
 }

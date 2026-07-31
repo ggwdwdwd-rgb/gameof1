@@ -1,5 +1,6 @@
+import * as Clipboard from "expo-clipboard";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, FlatList, KeyboardAvoidingView, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { buildEnvelopeFromLocalFile, persistLocalFile } from "../chat/media";
 import { getCurrentLocationOnce, pickAndCompressImage, pickFile } from "../chat/pickers";
@@ -10,8 +11,9 @@ import { Avatar } from "../ui/Avatar";
 import { Composer } from "../ui/Composer";
 import { Header } from "../ui/Header";
 import { Icon } from "../ui/Icon";
+import { ImageViewer } from "../ui/ImageViewer";
 import { MessageBubble, type Decorated } from "../ui/MessageBubble";
-import { useKeyboardVisible } from "../ui/useKeyboardVisible";
+import { useKeyboard } from "../ui/useKeyboard";
 import { Wallpaper } from "../ui/Wallpaper";
 import { uuidv4 } from "../util/uuid";
 
@@ -86,10 +88,11 @@ export function ChatScreen({
     useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const keyboardVisible = useKeyboardVisible();
+  const keyboard = useKeyboard();
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
   const listRef = useRef<FlatList<Decorated>>(null);
 
   const contact = contacts.find((c) => c.userId === peerUserId);
@@ -102,7 +105,9 @@ export function ChatScreen({
     [contacts, identity.userId],
   );
 
-  const decorated = useMemo(() => decorate(messages, nameFor), [messages, nameFor]);
+  // Список inverted: элемент 0 рисуется внизу, поэтому порядок обратный.
+  // Разметку строки это не меняет — внутри ячейки порядок остаётся обычным.
+  const decorated = useMemo(() => decorate(messages, nameFor).reverse(), [messages, nameFor]);
 
   useEffect(() => {
     let mounted = true;
@@ -138,12 +143,6 @@ export function ChatScreen({
     };
   }, [chatId, chatEvents, markChatRead]);
 
-  // Клавиатура уменьшает список, но не меняет размер его содержимого, поэтому
-  // onContentSizeChange не срабатывает — доскроллим до последнего сообщения сами.
-  useEffect(() => {
-    if (keyboardVisible) listRef.current?.scrollToEnd({ animated: true });
-  }, [keyboardVisible]);
-
   // Уходя с экрана, обязательно снимаем свой индикатор "печатает".
   useEffect(() => () => setTyping(chatId, false), [chatId, setTyping]);
 
@@ -172,6 +171,12 @@ export function ChatScreen({
       const buttons: { text: string; onPress?: () => void; style?: "destructive" | "cancel" }[] = [
         { text: "Ответить", onPress: () => setReplyingTo(item) },
       ];
+      // Копировать имеет смысл только текст: у вложений в plaintext лежат
+      // метаданные файла, а не то, что видит пользователь.
+      if (item.contentType === "text" && item.plaintext !== null) {
+        const text = item.plaintext;
+        buttons.push({ text: "Копировать", onPress: () => void Clipboard.setStringAsync(text) });
+      }
       if (item.fromUserId === identity.userId) {
         buttons.push({
           text: "Удалить у всех",
@@ -223,6 +228,8 @@ export function ChatScreen({
 
   const handleTyping = useCallback((isTyping: boolean) => setTyping(chatId, isTyping), [chatId, setTyping]);
 
+  const handleOpenImage = useCallback((uri: string) => setViewerUri(uri), []);
+
   const renderItem = useCallback(
     ({ item }: { item: Decorated }) => (
       <MessageBubble
@@ -230,19 +237,19 @@ export function ChatScreen({
         mine={item.message.fromUserId === identity.userId}
         theme={theme}
         onLongPress={handleLongPress}
+        onOpenImage={handleOpenImage}
       />
     ),
-    [handleLongPress, identity.userId, theme],
+    [handleLongPress, handleOpenImage, identity.userId, theme],
   );
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor: theme.colors.background }]}
-      // behavior нужен и на Android: приложение рисуется edge-to-edge, окно
-      // само не сжимается, поэтому без этого клавиатура закрывала ввод.
-      behavior="padding"
-      keyboardVerticalOffset={0}
-    >
+    // Отступ снизу равен высоте клавиатуры. KeyboardAvoidingView здесь не
+    // подходит: он считает отступ по onLayout содержимого, и с растущим
+    // multiline-вводом получалась петля «ввод вырос → отступ изменился →
+    // ввод пересчитался», из-за которой приложение подвисало ровно тогда,
+    // когда сообщение перестаёт влезать в одну строку.
+    <View style={[styles.container, { backgroundColor: theme.colors.background, paddingBottom: keyboard.height }]}>
       <Wallpaper />
 
       <Header
@@ -260,6 +267,10 @@ export function ChatScreen({
         keyExtractor={keyExtractor}
         contentContainerStyle={decorated.length === 0 ? styles.emptyContainer : styles.list}
         renderItem={renderItem}
+        // Открывается сразу на последних сообщениях: в inverted-списке начало
+        // данных — это низ экрана, поэтому ручной доскролл не нужен вовсе.
+        // Раньше чат открывался посередине, пока scrollToEnd не сработает.
+        inverted
         // Длинная переписка не должна отрисовываться целиком: держим окно
         // вокруг видимой области. removeClippedSubviews сознательно не включаю —
         // на Android он периодически оставляет пустые строки, а выигрыш здесь
@@ -288,7 +299,6 @@ export function ChatScreen({
             </View>
           </View>
         }
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
       />
 
       {replyingTo && (
@@ -309,7 +319,7 @@ export function ChatScreen({
       )}
 
       <Composer
-        bottomInset={keyboardVisible ? 0 : insets.bottom}
+        bottomInset={keyboard.visible ? 0 : insets.bottom}
         onSendText={handleSendText}
         onTyping={handleTyping}
         onPickImage={handlePickImage}
@@ -317,7 +327,9 @@ export function ChatScreen({
         onShareLocation={handleShareLocation}
         onVoiceRecorded={handleVoiceRecorded}
       />
-    </KeyboardAvoidingView>
+
+      <ImageViewer uri={viewerUri} onClose={() => setViewerUri(null)} />
+    </View>
   );
 }
 
