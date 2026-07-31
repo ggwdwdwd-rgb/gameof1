@@ -31,7 +31,9 @@ export type ConnectionState = "idle" | "connecting" | "connected" | "reconnectin
  */
 export type ConnectionFailure =
   | { kind: "auth"; code: string }
-  | { kind: "network"; detail: string };
+  | { kind: "network"; detail: string }
+  /** Приложение не смогло инициализироваться — соединение даже не начиналось. */
+  | { kind: "fatal"; detail: string };
 
 export type AuthMode =
   | { kind: "device"; deviceId: string; identitySecretKey: string }

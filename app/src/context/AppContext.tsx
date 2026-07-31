@@ -47,6 +47,7 @@ export type CreateInviteResult =
 /** Человекочитаемая причина отказа + что делать. Пустая строка = проблема не в аутентификации. */
 export function describeFailure(failure: ConnectionFailure | null): string {
   if (!failure) return "";
+  if (failure.kind === "fatal") return `Приложение не смогло запуститься: ${failure.detail}`;
   if (failure.kind === "network") return `Сервер недоступен (${failure.detail}).`;
   switch (failure.code) {
     case "UNKNOWN_DEVICE":
@@ -128,6 +129,9 @@ export function AppProvider({
     let cancelled = false;
     const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+    // catch обязателен: без него исключение здесь (например, из проверки сборки
+    // libsodium) уходило в unhandled rejection, ws.connect() не вызывался
+    // никогда, и приложение просто оставалось «без соединения» без объяснений.
     void (async () => {
       const crypto = await getCrypto();
       if (cancelled) return;
@@ -230,7 +234,11 @@ export function AppProvider({
       });
 
       ws.connect();
-    })();
+    })().catch((error: unknown) => {
+      if (cancelled) return;
+      const detail = error instanceof Error ? error.message : String(error);
+      setConnectionFailure({ kind: "fatal", detail });
+    });
 
     // Android рвёт сокеты у свёрнутых приложений, событие close при этом может
     // не прийти. Поэтому при каждом возврате в приложение проверяем связь и,

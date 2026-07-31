@@ -2,6 +2,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createCrypto } from "../src/index";
 import type { SodiumLike } from "../src/sodium";
 import { getTestSodium } from "./testSodium";
+import { readNativeSodiumExports } from "./deviceExports";
+import { utf8DecodeFallback, utf8EncodeFallback } from "../src/utf8";
 
 let sodium: Awaited<ReturnType<typeof getTestSodium>>;
 let crypto: ReturnType<typeof createCrypto>;
@@ -161,29 +163,26 @@ describe("fingerprint (сверка ключей вслух)", () => {
 });
 
 /**
- * Пакет обязан пользоваться только теми примитивами, которые есть в
- * react-native-libsodium: именно из-за отсутствующего там crypto_box_beforenm
- * отправка сообщений на устройстве падала, хотя тесты в Node проходили.
- * Этот тест фиксирует список и не даёт снова взять недоступную функцию.
+ * Пакет обязан пользоваться только теми примитивами, которые реально есть в
+ * react-native-libsodium. Это уже дважды ломало приложение при зелёных тестах в
+ * Node: сначала из-за отсутствующего crypto_box_beforenm, потом из-за
+ * from_string, которого в нативной сборке нет вовсе.
+ *
+ * Поэтому список доступного не пишется руками, а читается из самого модуля.
  */
 describe("совместимость с react-native-libsodium", () => {
-  const AVAILABLE_ON_DEVICE = new Set([
-    "ready",
-    "crypto_sign_keypair",
-    "crypto_sign_detached",
-    "crypto_sign_verify_detached",
-    "crypto_box_keypair",
-    "crypto_box_easy",
-    "crypto_box_open_easy",
-    "crypto_generichash",
-    "randombytes_buf",
-    "to_base64",
-    "from_base64",
-    "from_string",
-    "to_string",
-    "crypto_box_NONCEBYTES",
-    "crypto_box_SECRETKEYBYTES",
-  ]);
+  const availableOnDevice = readNativeSodiumExports();
+
+  it("нативная сборка действительно не содержит функций, из-за которых всё падало", () => {
+    // Страховка на случай, если разбор экспортов однажды перестанет работать и
+    // начнёт возвращать «всё разрешено»: эти имена там отсутствовать обязаны.
+    expect(availableOnDevice.has("crypto_box_beforenm")).toBe(false);
+    expect(availableOnDevice.has("from_string")).toBe(false);
+    // А эти — обязаны быть, иначе список прочитан неверно.
+    expect(availableOnDevice.has("crypto_box_easy")).toBe(true);
+    expect(availableOnDevice.has("to_string")).toBe(true);
+    expect(availableOnDevice.size).toBeGreaterThan(30);
+  });
 
   it("createCrypto обращается только к доступным на устройстве функциям", () => {
     const used = new Set<string>();
@@ -204,8 +203,29 @@ describe("совместимость с react-native-libsodium", () => {
     probed.boxOpen(payload, encryption.publicKey, peer.secretKey);
     probed.computeFingerprint(identity.publicKey);
 
-    const forbidden = [...used].filter((name) => !AVAILABLE_ON_DEVICE.has(name));
+    const forbidden = [...used].filter((name) => !availableOnDevice.has(name));
     expect(forbidden).toEqual([]);
+  });
+
+  it("шифрование работает на sodium без функций, отсутствующих на устройстве", () => {
+    // Полная имитация устройства: всё, чего нет в нативной сборке, недоступно.
+    const deviceSodium = new Proxy(sodium as unknown as Record<string, unknown>, {
+      get(target, prop: string) {
+        if (!availableOnDevice.has(prop)) return undefined;
+        return target[prop];
+      },
+    }) as unknown as SodiumLike;
+
+    const onDevice = createCrypto(deviceSodium);
+    const me = onDevice.generateEncryptionKeyPair();
+    const peer = onDevice.generateEncryptionKeyPair();
+    const text = "Проверка на устройстве: кириллица, эмодзи 🔐, symbols";
+
+    const payload = onDevice.boxEncrypt(text, peer.publicKey, me.secretKey);
+    expect(onDevice.boxOpen(payload, me.publicKey, peer.secretKey)).toBe(text);
+    expect(onDevice.computeFingerprint(onDevice.generateIdentityKeyPair().publicKey)).toMatch(
+      /^[0-9A-F]{4}( [0-9A-F]{4}){7}$/,
+    );
   });
 });
 
@@ -290,5 +310,62 @@ describe("совместимость вариантов base64 (история �
     expect(crypto.computeFingerprint(toStandardBase64(identity.publicKey))).toBe(
       crypto.computeFingerprint(identity.publicKey),
     );
+  });
+});
+
+/**
+ * Своя реализация UTF-8 (src/utf8.ts) появилась потому, что в нативной сборке
+ * react-native-libsodium нет `from_string`. Сверяем её с эталоном — TextEncoder
+ * из Node: именно fallback-версия работает на телефоне, где TextEncoder нет.
+ */
+describe("UTF-8 без sodium и без TextEncoder", () => {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder("utf-8");
+
+  const samples = [
+    "",
+    "ascii only",
+    "Привет, семья",
+    "emoji \u{1F510} и составное \u{1F468}\u200D\u{1F469}\u200D\u{1F467}",
+    "смешанное: a\u2014б в\t\n\"'<>&",
+    "граница 2 байт: ¡¢£ÿ",
+    "граница 3 байт: \u0800\uFFFD日本語",
+    "вне BMP: \u{1D11E}\u{10348}\u{1F004}",
+  ];
+
+  it("кодирует ровно так же, как TextEncoder", () => {
+    for (const sample of samples) {
+      expect(Array.from(utf8EncodeFallback(sample)), sample).toEqual(Array.from(encoder.encode(sample)));
+    }
+  });
+
+  it("декодирует ровно так же, как TextDecoder", () => {
+    for (const sample of samples) {
+      const bytes = encoder.encode(sample);
+      expect(utf8DecodeFallback(bytes), sample).toBe(decoder.decode(bytes));
+    }
+  });
+
+  it("round-trip выдерживает все кодовые точки BMP и несколько за её пределами", () => {
+    let text = "";
+    for (let code = 0; code < 0x10000; code += 1) {
+      // Сурогаты по отдельности невалидны — они проверены отдельным тестом.
+      if (code >= 0xd800 && code <= 0xdfff) continue;
+      text += String.fromCharCode(code);
+    }
+    text += "\u{1D11E}\u{1F510}\u{1F44D}";
+    expect(utf8DecodeFallback(utf8EncodeFallback(text))).toBe(text);
+  });
+
+  it("одинокий сурогат не роняет кодирование, а заменяется на U+FFFD", () => {
+    const lonely = "до\uD83Dпосле";
+    expect(utf8DecodeFallback(utf8EncodeFallback(lonely))).toBe("до\uFFFDпосле");
+    // TextEncoder делает точно так же — поведение не самодельное.
+    expect(decoder.decode(encoder.encode(lonely))).toBe("до\uFFFDпосле");
+  });
+
+  it("справляется с длинной строкой (проверка чанкования при декодировании)", () => {
+    const long = "строка с кириллицей и эмодзи \u{1F510} ".repeat(20_000);
+    expect(utf8DecodeFallback(utf8EncodeFallback(long))).toBe(long);
   });
 });

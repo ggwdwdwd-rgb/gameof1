@@ -3,9 +3,11 @@
  *
  * ВАЖНО: набор функций ограничен тем, что реализовано в `react-native-libsodium`
  * (клиент). Эта библиотека покрывает лишь часть API `libsodium-wrappers`
- * (сервер, тесты) — например, `crypto_box_beforenm` в ней отсутствует, поэтому
- * парное шифрование сделано через `crypto_box_easy`, который есть в обеих.
- * Проверка наличия функций на старте — в app/src/crypto/sodium.ts.
+ * (сервер, тесты): например, `crypto_box_beforenm` в ней отсутствует, поэтому
+ * парное шифрование сделано через `crypto_box_easy`, который есть в обеих, а
+ * `from_string` не экспортирован вовсе — UTF-8 считается своим кодом (utf8.ts).
+ * Список берётся не на глаз: тест «совместимость с react-native-libsodium»
+ * сверяет его с настоящими экспортами нативного модуля.
  */
 export interface SodiumLike {
   readonly ready: Promise<void>;
@@ -34,8 +36,6 @@ export interface SodiumLike {
 
   to_base64(input: Uint8Array): string;
   from_base64(input: string): Uint8Array;
-  from_string(input: string): Uint8Array;
-  to_string(input: Uint8Array): string;
 
   readonly crypto_box_NONCEBYTES: number;
   readonly crypto_box_SECRETKEYBYTES: number;

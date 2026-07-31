@@ -1,4 +1,5 @@
 import { decodeBase64 } from "./base64";
+import { utf8Decode, utf8Encode } from "./utf8";
 import type { SodiumLike } from "./sodium";
 import type { Base64, EncryptedPayload } from "./types";
 
@@ -7,6 +8,7 @@ import type { Base64, EncryptedPayload } from "./types";
  * см. ARCHITECTURE.md §2.2. Общий секрет выводится внутри самого
  * crypto_box_easy, поэтому отдельная функция вывода ключа не нужна — и это
  * важно: `crypto_box_beforenm` отсутствует в react-native-libsodium.
+ * UTF-8 тоже считаем сами (см. utf8.ts): `from_string` там тоже нет.
  *
  * Nonce — новый случайный на каждое сообщение (24 байта), AEAD-тег внутри box
  * даёт аутентификацию: получатель заметит подмену шифротекста.
@@ -19,7 +21,7 @@ export function boxEncrypt(
 ): EncryptedPayload {
   const nonce = sodium.randombytes_buf(sodium.crypto_box_NONCEBYTES);
   const ciphertext = sodium.crypto_box_easy(
-    sodium.from_string(plaintext),
+    utf8Encode(plaintext),
     nonce,
     decodeBase64(sodium, theirPublicKeyB64),
     decodeBase64(sodium, mySecretKeyB64),
@@ -40,5 +42,5 @@ export function boxOpen(
     decodeBase64(sodium, theirPublicKeyB64),
     decodeBase64(sodium, mySecretKeyB64),
   );
-  return sodium.to_string(plaintext);
+  return utf8Decode(plaintext);
 }

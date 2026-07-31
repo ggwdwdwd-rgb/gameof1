@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { dmChatId } from "../chat/chatId";
-import { useApp } from "../context/AppContext";
+import { describeFailure, useApp } from "../context/AppContext";
 import { getLastMessageForChat, type LocalMessage } from "../db/messages";
 import { useTheme } from "../theme/ThemeContext";
 import { Avatar } from "../ui/Avatar";
@@ -58,7 +58,7 @@ export function ChatListScreen({
   onOpenSettings: () => void;
   onAddPerson: () => void;
 }): React.ReactElement {
-  const { identity, connectionState, contacts, chatEvents, reconnect } = useApp();
+  const { identity, connectionState, connectionFailure, contacts, chatEvents, reconnect } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<ChatRow[]>([]);
@@ -106,6 +106,16 @@ export function ChatListScreen({
           </Pressable>
         }
       />
+
+      {/* Фатальную ошибку показываем полосой: она не пройдёт сама, и молчать
+          о ней нельзя — иначе приложение просто «не работает» без объяснений. */}
+      {connectionFailure?.kind === "fatal" && (
+        <View style={[styles.banner, { backgroundColor: theme.colors.danger }]}>
+          <Text style={[styles.bannerText, { color: theme.colors.onAccent }]}>
+            {describeFailure(connectionFailure)}
+          </Text>
+        </View>
+      )}
 
       <FlatList
         data={rows}
@@ -167,6 +177,8 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   headerButton: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   headerIcon: { fontSize: 20 },
+  banner: { paddingHorizontal: 16, paddingVertical: 12 },
+  bannerText: { fontSize: 13, lineHeight: 18, fontWeight: "500" },
   list: { padding: 12, gap: 8 },
   emptyContainer: { flexGrow: 1, justifyContent: "center", padding: 32 },
   row: {

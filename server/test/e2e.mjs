@@ -14,6 +14,7 @@ const sodiumFull = require_("libsodium-wrappers");
 import { WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import { createCrypto } from "../../packages/crypto/src/index.ts";
+import { readNativeSodiumExports } from "../../packages/crypto/test/deviceExports.ts";
 
 Error.stackTraceLimit = 4;
 process.on("unhandledRejection", (e) => {
@@ -23,16 +24,12 @@ process.on("unhandledRejection", (e) => {
 
 await sodiumFull.ready;
 
-// Функции, которых на устройстве НЕТ — прячем, чтобы обращение к ним упало.
-const MISSING_ON_DEVICE = new Set([
-  "crypto_box_beforenm",
-  "crypto_box_easy_afternm",
-  "crypto_aead_xchacha20poly1305_ietf_encrypt",
-  "crypto_aead_xchacha20poly1305_ietf_decrypt",
-]);
+// Оставляем доступным ровно то, что экспортирует нативная сборка
+// react-native-libsodium — список читается из самого модуля, не пишется руками.
+const availableOnDevice = readNativeSodiumExports();
 const sodium = new Proxy(sodiumFull, {
   get(target, prop) {
-    if (typeof prop === "string" && MISSING_ON_DEVICE.has(prop)) return undefined;
+    if (typeof prop === "string" && !availableOnDevice.has(prop)) return undefined;
     return target[prop];
   },
 });

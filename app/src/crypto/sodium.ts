@@ -2,11 +2,13 @@ import sodium from "react-native-libsodium";
 import { createCrypto, type SodiumLike } from "@family-messenger/crypto";
 
 /**
- * Функции sodium, без которых приложение работать не может. Проверяем их
- * наличие на старте осознанно: react-native-libsodium реализует лишь часть
- * API libsodium-wrappers, и раньше отсутствующий crypto_box_beforenm приводил
- * к тому, что отправка сообщений молча падала с исключением внутри обработчика.
- * Теперь такая ситуация обнаруживается сразу и с понятным текстом.
+ * Функции sodium, без которых приложение работать не может.
+ *
+ * react-native-libsodium реализует лишь часть API libsodium-wrappers, и это уже
+ * дважды ломало приложение: сначала отсутствующий `crypto_box_beforenm`, потом
+ * `from_string`, которого в нативной сборке нет вовсе. Здесь их нет и быть не
+ * должно — UTF-8 считает сам @family-messenger/crypto. Соответствие этого
+ * списка настоящим экспортам модуля проверяется тестом в packages/crypto.
  */
 const REQUIRED_FUNCTIONS = [
   "crypto_sign_keypair",
@@ -19,8 +21,6 @@ const REQUIRED_FUNCTIONS = [
   "randombytes_buf",
   "to_base64",
   "from_base64",
-  "from_string",
-  "to_string",
 ] as const;
 
 function assertSodiumComplete(instance: Record<string, unknown>): void {
