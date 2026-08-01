@@ -33,6 +33,13 @@ export async function listOutbox(): Promise<OutboxItem[]> {
   }));
 }
 
+/** Сколько сообщений ждёт отправки — главный признак «сервер их не принял». */
+export async function countOutbox(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>("SELECT COUNT(*) AS n FROM outbox");
+  return row?.n ?? 0;
+}
+
 export async function removeFromOutbox(clientMsgId: string): Promise<void> {
   const db = await getDb();
   await db.runAsync("DELETE FROM outbox WHERE client_msg_id = ?", [clientMsgId]);

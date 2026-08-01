@@ -102,6 +102,13 @@ export async function updateMessageTime(clientMsgId: string, createdAt: number):
   return result.changes > 0;
 }
 
+/** Сколько сообщений всего лежит локально — для диагностики. */
+export async function countMessages(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>("SELECT COUNT(*) AS n FROM messages");
+  return row?.n ?? 0;
+}
+
 export async function listMessagesForChat(chatId: string, limit = 200): Promise<LocalMessage[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<MessageRow>(

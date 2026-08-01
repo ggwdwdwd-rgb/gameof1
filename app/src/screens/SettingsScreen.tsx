@@ -3,8 +3,10 @@ import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Te
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { describeFailure, useApp } from "../context/AppContext";
 import { contactTitle, type Contact } from "../db/contacts";
+import { countMessages } from "../db/messages";
+import { countOutbox } from "../db/outbox";
 import { useTheme, useThemePreference } from "../theme/ThemeContext";
-import type { ThemePreference } from "../theme/theme";
+import type { Theme, ThemePreference } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
 import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
@@ -22,6 +24,26 @@ const THEME_OPTIONS: { value: ThemePreference; label: string; icon: IconName }[]
 function SectionTitle({ children }: { children: string }): React.ReactElement {
   const theme = useTheme();
   return <Text style={[styles.sectionTitle, { color: theme.colors.textMuted }]}>{children.toUpperCase()}</Text>;
+}
+
+/** Строка «показатель — значение» в блоке диагностики. */
+function DiagRow({
+  label,
+  value,
+  theme,
+  alarm = false,
+}: {
+  label: string;
+  value: string;
+  theme: Theme;
+  alarm?: boolean;
+}): React.ReactElement {
+  return (
+    <View style={styles.diagRow}>
+      <Text style={[styles.diagLabel, { color: theme.colors.textSecondary }]}>{label}</Text>
+      <Text style={[styles.diagValue, { color: alarm ? theme.colors.danger : theme.colors.textPrimary }]}>{value}</Text>
+    </View>
+  );
 }
 
 function Card({ children }: { children: React.ReactNode }): React.ReactElement {
@@ -63,9 +85,21 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
   /** Контакт, которому меняем своё название. */
   const [renaming, setRenaming] = useState<Contact | null>(null);
 
+  /**
+   * Диагностика. Когда «на связи», но сообщения не ходят, по экрану этого не
+   * понять: очередь отправки, число контактов и число сообщений в базе
+   * разделяют совершенно разные причины — сервер не принимает, список
+   * участников не разобрался, база не пишется.
+   */
+  const [diag, setDiag] = useState<{ outbox: number; messages: number } | null>(null);
+  const refreshDiag = useCallback(async () => {
+    setDiag({ outbox: await countOutbox(), messages: await countMessages() });
+  }, []);
+
   useEffect(() => {
     void getPermissionState().then((state) => setPermissionDenied(state === "denied"));
-  }, []);
+    void refreshDiag();
+  }, [refreshDiag]);
 
   const handleSaveName = useCallback(async () => {
     setSavingName(true);
@@ -298,6 +332,38 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
           </View>
         </Card>
 
+        <SectionTitle>Диагностика</SectionTitle>
+        <Card>
+          <View style={styles.block}>
+            <DiagRow label="Соединение" value={connectionState} theme={theme} />
+            <DiagRow label="Участников известно" value={String(activeContacts.length)} theme={theme} />
+            <DiagRow label="Сообщений в базе" value={diag ? String(diag.messages) : "…"} theme={theme} />
+            <DiagRow
+              label="Ждут отправки"
+              value={diag ? String(diag.outbox) : "…"}
+              theme={theme}
+              // Непустая очередь при живом соединении — это уже ответ: сервер
+              // сообщения не подтверждает.
+              alarm={diag !== null && diag.outbox > 0}
+            />
+            <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+              «Ждут отправки» больше нуля при соединении «connected» означает, что сервер не подтверждает приём —
+              скорее всего, на нём старая версия. Ноль участников означает, что не разобрался список участников, и тогда
+              шифровать сообщения не для кого.
+            </Text>
+            <Pressable
+              style={({ pressed }) => [
+                styles.reconnectButton,
+                { backgroundColor: theme.colors.accentSoft, opacity: pressed ? 0.7 : 1 },
+              ]}
+              onPress={() => void refreshDiag()}
+            >
+              <Icon name="refresh" size={18} color={theme.colors.accent} />
+              <Text style={[styles.reconnectText, { color: theme.colors.accent }]}>Обновить</Text>
+            </Pressable>
+          </View>
+        </Card>
+
         <SectionTitle>{`Участники · ${activeContacts.length}`}</SectionTitle>
         <Card>
           {activeContacts.length === 0 ? (
@@ -421,6 +487,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   reconnectText: { fontSize: 15, fontWeight: "600" },
+  diagRow: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 12, paddingVertical: 4 },
+  diagLabel: { fontSize: 14 },
+  diagValue: { fontSize: 14, fontWeight: "600" },
   memberText: { flex: 1 },
   memberName: { fontSize: 15.5, fontWeight: "600" },
   memberFingerprint: { fontSize: 11.5, marginTop: 3, letterSpacing: 0.4 },

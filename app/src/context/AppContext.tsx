@@ -53,7 +53,10 @@ interface ChatEvents extends Record<string, (...args: never[]) => void> {
   typingChanged: (chatId: string, fromUserId: string, isTyping: boolean) => void;
 }
 
-export type SendResult = { ok: true } | { ok: false; reason: "NO_CONTACT" | "NOT_READY" | "CRYPTO_FAILED" };
+export type SendResult =
+  | { ok: true }
+  /** detail заполняется у FAILED: там текст настоящей ошибки. */
+  | { ok: false; reason: "NO_CONTACT" | "NOT_READY" | "CRYPTO_FAILED" | "FAILED"; detail?: string };
 
 export type CreateInviteResult =
   | { ok: true; invite: InviteCreatedPayload }
@@ -243,6 +246,15 @@ export function AppProvider({
         return contact;
       }
 
+      /**
+       * Разбор roster обязан жаловаться, если сломался.
+       *
+       * Здесь начинается вся работа после подключения: без контактов нечем
+       * шифровать (отправка отвечает NO_CONTACT) и нечем расшифровывать
+       * входящее, а история даже не запрашивается. Раньше исключение из этого
+       * обработчика уходило в никуда, и получалось худшее из состояний:
+       * «на связи», но ничего не работает и никаких следов причины.
+       */
       ws.events.on("roster", (payload) => {
         void (async () => {
           for (const member of payload.members) {
@@ -262,11 +274,21 @@ export function AppProvider({
             const chatId = dmChatId(identity.userId, member.userId);
             ws.fetchHistory(chatId, await getLastSyncedTs(chatId));
           }
-        })();
+        })().catch((error: unknown) => {
+          setConnectionFailure({
+            kind: "fatal",
+            detail: `не удалось разобрать список участников: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        });
       });
 
       ws.events.on("memberJoined", (member) => {
-        void upsertAndTrack(member);
+        void upsertAndTrack(member).catch((error: unknown) => {
+          setConnectionFailure({
+            kind: "fatal",
+            detail: `не удалось сохранить участника: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        });
       });
 
       ws.events.on("presence", (payload) => {
@@ -325,6 +347,13 @@ export function AppProvider({
                   });
                 }
               : undefined,
+        }).catch((error: unknown) => {
+          // Пришедшее сообщение, потерянное без следа, — это «сообщения не
+          // идут» без единой зацепки. Показываем причину.
+          setConnectionFailure({
+            kind: "fatal",
+            detail: `сообщение не удалось сохранить: ${error instanceof Error ? error.message : String(error)}`,
+          });
         });
       });
 
@@ -479,28 +508,36 @@ export function AppProvider({
 
       const clientMsgId = uuidv4();
 
-      await insertMessage({
-        id: clientMsgId,
-        clientMsgId,
-        chatId,
-        fromUserId: identity.userId,
-        contentType,
-        plaintext: localPlaintext,
-        replyTo,
-        status: "pending",
-        createdAt: Date.now(),
-        deletedAt: null,
-      });
-      chatEvents.emit("messageInserted", chatId);
+      // try вокруг записи и отправки: без него ошибка sqlite или сериализации
+      // превращалась в отклонённый промис, который никто не ждёт. Наружу это
+      // выглядело как «нажал отправить, и ничего не произошло» — без сообщения,
+      // без пузыря, без следа.
+      try {
+        await insertMessage({
+          id: clientMsgId,
+          clientMsgId,
+          chatId,
+          fromUserId: identity.userId,
+          contentType,
+          plaintext: localPlaintext,
+          replyTo,
+          status: "pending",
+          createdAt: Date.now(),
+          deletedAt: null,
+        });
+        chatEvents.emit("messageInserted", chatId);
 
-      await ws.sendMessage({
-        clientMsgId,
-        chatId,
-        contentType,
-        ciphertext: encrypted.ciphertext,
-        nonce: encrypted.nonce,
-        replyTo,
-      });
+        await ws.sendMessage({
+          clientMsgId,
+          chatId,
+          contentType,
+          ciphertext: encrypted.ciphertext,
+          nonce: encrypted.nonce,
+          replyTo,
+        });
+      } catch (error) {
+        return { ok: false, reason: "FAILED", detail: error instanceof Error ? error.message : String(error) };
+      }
 
       // Сообщение уже в outbox и уйдёт при подключении, но ждать до 30 секунд
       // backoff незачем: если связи нет — пробуем подключиться немедленно.

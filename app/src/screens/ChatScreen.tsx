@@ -24,10 +24,11 @@ import { uuidv4 } from "../util/uuid";
 /** Сообщения от одного автора в пределах этого времени склеиваются в группу. */
 const GROUP_WINDOW_MS = 2 * 60 * 1000;
 
-const SEND_ERRORS: Record<"NO_CONTACT" | "NOT_READY" | "CRYPTO_FAILED", string> = {
+const SEND_ERRORS: Record<"NO_CONTACT" | "NOT_READY" | "CRYPTO_FAILED" | "FAILED", string> = {
   NO_CONTACT: "Данные собеседника ещё не получены с сервера. Дождитесь подключения и попробуйте снова.",
   NOT_READY: "Приложение ещё инициализируется. Попробуйте через секунду.",
   CRYPTO_FAILED: "Не удалось зашифровать сообщение. Переустановите приложение — возможно, повреждены ключи.",
+  FAILED: "Сообщение не удалось сохранить на устройстве.",
 };
 
 function isSameDay(a: number, b: number): boolean {
@@ -206,7 +207,9 @@ export function ChatScreen({
 
   const reportIfFailed = useCallback((result: SendResult): void => {
     if (result.ok) return;
-    Alert.alert("Сообщение не отправлено", SEND_ERRORS[result.reason]);
+    // detail — настоящий текст ошибки; без него причина остаётся догадкой.
+    const detail = result.detail !== undefined ? `\n\n${result.detail}` : "";
+    Alert.alert("Сообщение не отправлено", `${SEND_ERRORS[result.reason]}${detail}`);
   }, []);
 
   /** Забирает и сбрасывает выбранное сообщение-ответ. */
