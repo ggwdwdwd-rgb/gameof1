@@ -86,6 +86,20 @@ export async function getContact(userId: string): Promise<Contact | null> {
   return row ? fromRow(row) : null;
 }
 
+/**
+ * Полное удаление контакта вместе с перепиской.
+ *
+ * Нужно, когда участника удалили на сервере: писать ему нельзя (ключей от него
+ * ни у кого нет), а чат с ним висел бы в списке навсегда. Сообщения удаляем
+ * тоже — расшифровать их всё равно нечем, а место они занимают.
+ */
+export async function deleteContactWithChat(userId: string, chatId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("DELETE FROM messages WHERE chat_id = ?", [chatId]);
+  await db.runAsync("DELETE FROM sync_state WHERE chat_id = ?", [chatId]);
+  await db.runAsync("DELETE FROM contacts WHERE user_id = ?", [userId]);
+}
+
 export async function markContactRevoked(userId: string): Promise<void> {
   const db = await getDb();
   await db.runAsync("UPDATE contacts SET is_revoked = 1 WHERE user_id = ?", [userId]);

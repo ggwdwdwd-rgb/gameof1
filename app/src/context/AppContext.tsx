@@ -2,7 +2,13 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { AppState } from "react-native";
 import { createCrypto } from "@family-messenger/crypto";
 import { getCrypto } from "../crypto/sodium";
-import { listContacts, setContactLocalName, upsertContact, type Contact } from "../db/contacts";
+import {
+  deleteContactWithChat,
+  listContacts,
+  setContactLocalName,
+  upsertContact,
+  type Contact,
+} from "../db/contacts";
 import {
   hardDeleteMessage,
   insertMessage,
@@ -42,6 +48,12 @@ const MEDIA_CONTENT_TYPES = new Set(["image", "voice", "file"]);
 const TYPING_EXPIRY_MS = 6_000;
 
 const NOTIFICATIONS_SETTING = "notifications_enabled";
+/**
+ * Спрашивали ли уже системное разрешение. Отдельно от выключателя: отказ в
+ * разрешении не должен выглядеть как «пользователь выключил уведомления»,
+ * иначе включить их потом уже нечем.
+ */
+const NOTIFICATIONS_ASKED_SETTING = "notifications_asked";
 
 /** Сколько ждём готовности соединения там, где без сервера операция невозможна (создание инвайта). */
 const WAIT_READY_MS = 10_000;
@@ -270,6 +282,27 @@ export function AppProvider({
           for (const member of payload.members) {
             await upsertAndTrack(member);
           }
+
+          /**
+           * Участники, которых на сервере больше нет, удаляются и локально.
+           *
+           * roster — полный список остальных участников, то есть единственный
+           * источник правды. Раньше контакты только добавлялись: удалённый на
+           * сервере человек оставался в списке чатов навсегда. Обычный случай —
+           * переустановка приложения: она заводит новые ключи, то есть нового
+           * участника, а прежний «я» остаётся мёртвым чатом, писать в который
+           * бессмысленно.
+           */
+          const stillThere = new Set(payload.members.map((m) => m.userId));
+          const gone = contactsRef.current.filter((c) => !stillThere.has(c.userId));
+          if (gone.length > 0) {
+            for (const contact of gone) {
+              await deleteContactWithChat(contact.userId, dmChatId(identity.userId, contact.userId));
+            }
+            contactsRef.current = contactsRef.current.filter((c) => stillThere.has(c.userId));
+            setContacts(contactsRef.current);
+            setPresence((prev) => new Map([...prev].filter(([id]) => stillThere.has(id))));
+          }
           // Снимок присутствия приходит вместе со списком участников.
           setPresence(
             new Map(
@@ -450,25 +483,28 @@ export function AppProvider({
        * на это с проверкой сборки libsodium; ничего интерактивного и ничего
        * необязательного до connect быть не должно.
        *
-       * Спрашиваем только на первом запуске (значения в настройках ещё нет).
-       * Дальше решение пользователя уважаем и не переспрашиваем.
+       * Правило простое: "0" в настройках — это осознанное «выключить» самим
+       * пользователем, и его мы уважаем. Во всех остальных случаях включённость
+       * равна наличию системного разрешения.
+       *
+       * Прошлая версия этого кода записывала "0" при отказе в разрешении — и
+       * дальше уже не спрашивала и не проверяла. Один отказ (или диалог,
+       * закрытый мимо) навсегда выключал уведомления, даже если разрешение
+       * потом выдали в настройках телефона. Ровно на это и было «уведомления не
+       * идут»: пробное уведомление из настроек показывалось, а на сообщения —
+       * нет, потому что выключатель молча стоял в «выкл».
        */
       void (async () => {
         try {
-          if (stored === null) {
-            const granted = (await requestPermission()) === "granted";
-            await setSetting(NOTIFICATIONS_SETTING, granted ? "1" : "0");
-            notificationsRef.current = granted;
-            if (!cancelled) setNotificationsEnabled(granted);
-            return;
-          }
-          // Разрешение могли отозвать в настройках телефона — тогда выключатель
-          // обманывал бы, показывая «включено».
-          if (stored === "1" && (await getPermissionState()) !== "granted") {
-            await setSetting(NOTIFICATIONS_SETTING, "0");
-            notificationsRef.current = false;
-            if (!cancelled) setNotificationsEnabled(false);
-          }
+          if (stored === "0") return; // выключено вручную
+
+          const asked = (await getSetting(NOTIFICATIONS_ASKED_SETTING)) === "1";
+          const state = asked ? await getPermissionState() : await requestPermission();
+          if (!asked) await setSetting(NOTIFICATIONS_ASKED_SETTING, "1");
+
+          const on = state === "granted";
+          notificationsRef.current = on;
+          if (!cancelled) setNotificationsEnabled(on);
         } catch (error) {
           console.warn("не удалось настроить уведомления", error);
         }
@@ -651,6 +687,15 @@ export function AppProvider({
 
         const peers = contactsRef.current.filter((c) => !c.isRevoked);
         add("Участники получены", peers.length > 0, `известно: ${peers.length}`);
+
+        // Уведомления сюда же: «не приходят» может означать и запрет системы, и
+        // выключенный тумблер, а это разные действия.
+        const permission = await getPermissionState();
+        add(
+          "Уведомления включены",
+          notificationsRef.current && permission === "granted",
+          `выключатель: ${notificationsRef.current ? "вкл" : "выкл"}, разрешение: ${permission}`,
+        );
 
         const peer = peers[0];
         if (!crypto || !peer) return steps;
