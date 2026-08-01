@@ -304,12 +304,20 @@ function ComposerBase({
         },
         onPanResponderRelease: () => {
           holdingRef.current = false;
+          const cancelled = cancelRef.current;
+          // Признак отмены обязательно сбрасываем здесь же. Без этого кнопка
+          // навсегда оставалась красной мусоркой, а следующая запись
+          // начиналась уже «готовой к отмене» и выбрасывалась при отпускании.
+          cancelRef.current = false;
+          setCancelArmed(false);
           Animated.timing(slide, { toValue: 0, duration: DURATION.fast, useNativeDriver: true }).start();
-          void finishRecording(cancelRef.current);
+          void finishRecording(cancelled);
         },
         // Жест перехватила система (звонок, шторка) — это отмена, а не отправка.
         onPanResponderTerminate: () => {
           holdingRef.current = false;
+          cancelRef.current = false;
+          setCancelArmed(false);
           slide.setValue(0);
           void finishRecording(true);
         },
@@ -483,12 +491,33 @@ function RecordingBar({
     >
       <Animated.View style={[styles.recordingDot, { backgroundColor: theme.colors.danger, opacity: blink }]} />
       <Text style={[styles.recordingTime, { color: theme.colors.textPrimary }]}>{formatDuration(durationMs)}</Text>
-      <Text
-        style={[styles.recordingHint, { color: cancelArmed ? theme.colors.danger : theme.colors.textMuted }]}
-        numberOfLines={1}
-      >
-        {cancelArmed ? "Отпустите — запись не отправится" : "‹ смахните влево, чтобы отменить"}
-      </Text>
+      {cancelArmed ? (
+        <View style={styles.recordingCancel}>
+          <Icon name="trash" size={17} color={theme.colors.danger} />
+          <Text style={[styles.recordingHint, { color: theme.colors.danger }]} numberOfLines={1}>
+            Отпустите — не отправится
+          </Text>
+        </View>
+      ) : (
+        // Подсказка тает по мере сдвига: к порогу отмены она уже не нужна,
+        // а её место занимает мусорка.
+        <Animated.Text
+          style={[
+            styles.recordingHint,
+            {
+              color: theme.colors.textMuted,
+              opacity: slide.interpolate({
+                inputRange: [-CANCEL_DISTANCE, 0],
+                outputRange: [0.15, 1],
+                extrapolate: "clamp",
+              }),
+            },
+          ]}
+          numberOfLines={1}
+        >
+          ‹ смахните влево, чтобы отменить
+        </Animated.Text>
+      )}
     </Animated.View>
   );
 }
@@ -532,6 +561,7 @@ const styles = StyleSheet.create({
   recordingDot: { width: 9, height: 9, borderRadius: 5 },
   recordingTime: { fontSize: 15.5, fontWeight: "600", fontVariant: ["tabular-nums"], minWidth: 42 },
   recordingHint: { flex: 1, fontSize: 13, textAlign: "right" },
+  recordingCancel: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 7 },
   attachButton: { width: 38, height: 42, alignItems: "center", justifyContent: "center" },
   input: { flex: 1, paddingTop: 11, paddingBottom: 11, maxHeight: 120, fontSize: 16, lineHeight: 21 },
   sendButton: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },

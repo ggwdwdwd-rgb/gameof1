@@ -184,8 +184,17 @@ alice.send("msg.send", {
 });
 const accepted = await alice.wait("msg.accepted", (m) => m.payload.clientMsgId === clientMsgId);
 check("сервер принял сообщение (msg.accepted)", Boolean(accepted));
+// Время в подтверждении — то самое, которым сервер пометил сообщение.
+// Отправитель переписывает им своё местное, иначе порядок переписки у двух
+// собеседников расходится при расхождении часов телефонов.
+check("в msg.accepted есть серверное время", typeof accepted.payload.ts === "number", String(accepted.payload.ts));
 
 const delivered = await bob.wait("msg.deliver", (m) => m.payload.msgId === clientMsgId);
+check(
+  "время у отправителя и получателя совпадает",
+  accepted.payload.ts === delivered.payload.ts,
+  `${accepted.payload.ts} vs ${delivered.payload.ts}`,
+);
 const decrypted = crypto.boxOpen(
   { ciphertext: delivered.payload.ciphertext, nonce: delivered.payload.nonce },
   bobPubKey,

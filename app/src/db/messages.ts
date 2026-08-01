@@ -81,6 +81,27 @@ export async function updateMessageStatus(clientMsgId: string, status: MessageSt
   return result.changes > 0;
 }
 
+/**
+ * Переписывает время сообщения на присвоенное сервером.
+ *
+ * Порядок сообщений должен быть один и тот же у всех: сервер — единственные
+ * часы, которым доверяют обе стороны. Своё сообщение сначала кладётся с
+ * местным временем (чтобы появиться в чате мгновенно), а после подтверждения
+ * выравнивается по серверному. Без этого расхождение часов телефонов на минуту
+ * давало разный порядок переписки у отправителя и получателя.
+ *
+ * Возвращает true, если время действительно изменилось.
+ */
+export async function updateMessageTime(clientMsgId: string, createdAt: number): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.runAsync("UPDATE messages SET created_at = ? WHERE client_msg_id = ? AND created_at != ?", [
+    createdAt,
+    clientMsgId,
+    createdAt,
+  ]);
+  return result.changes > 0;
+}
+
 export async function listMessagesForChat(chatId: string, limit = 200): Promise<LocalMessage[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<MessageRow>(

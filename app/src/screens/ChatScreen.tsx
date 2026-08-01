@@ -1,7 +1,6 @@
 import * as Clipboard from "expo-clipboard";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { buildEnvelopeFromLocalFile, persistLocalFile } from "../chat/media";
 import { getCurrentLocationOnce, pickAndCompressImage, pickFile } from "../chat/pickers";
 import { useApp, type SendResult } from "../context/AppContext";
@@ -109,7 +108,6 @@ export function ChatScreen({
     renameContact,
   } = useApp();
   const theme = useTheme();
-  const insets = useSafeAreaInsets();
   const keyboard = useKeyboard();
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
@@ -417,7 +415,10 @@ export function ChatScreen({
       )}
 
       <Composer
-        bottomInset={keyboard.visible ? 0 : insets.bottom}
+        // Отступ считает useKeyboard: при открытой клавиатуре системный инсет
+        // обнуляется, хотя место под навигацию всё ещё нужно, и строка ввода
+        // уезжала под клавиатуру.
+        bottomInset={keyboard.safeBottom}
         onSendText={handleSendText}
         onTyping={handleTyping}
         onPickImage={handlePickImage}

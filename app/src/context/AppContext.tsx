@@ -10,12 +10,19 @@ import {
   markMessageDeleted,
   messageExists,
   updateMessageStatus,
+  updateMessageTime,
   type LocalMessage,
 } from "../db/messages";
 import { listPendingAcks, queueAck, removePendingAck } from "../db/pendingAcks";
 import { getSetting, setSetting } from "../db/settings";
 import { getLastSyncedTs, setLastSyncedTs } from "../db/syncState";
-import { describeForNotification, dismissChat, showIncoming } from "../notify/notifications";
+import {
+  describeForNotification,
+  dismissChat,
+  getPermissionState,
+  requestPermission,
+  showIncoming,
+} from "../notify/notifications";
 import { decryptDeliveredMessage, encryptForChat } from "../chat/encryption";
 import { dmChatId } from "../chat/chatId";
 import { saveIncomingEnvelope, type LocalMediaMeta } from "../chat/media";
@@ -185,9 +192,29 @@ export function AppProvider({
       cryptoRef.current = crypto;
       setMyFingerprint(crypto.computeFingerprint(identity.identityPublicKey));
 
-      const storedNotifications = (await getSetting(NOTIFICATIONS_SETTING)) === "1";
-      notificationsRef.current = storedNotifications;
-      if (!cancelled) setNotificationsEnabled(storedNotifications);
+      /**
+       * Уведомления включаем сами при первом запуске.
+       *
+       * Раньше выключатель по умолчанию стоял в «выкл», и уведомления не
+       * приходили просто потому, что о нём никто не знал: искать его в
+       * настройках никому в голову не приходит. Теперь на первом запуске
+       * спрашиваем системное разрешение (на Android 13+ оно обязательно) и,
+       * если дали, включаем. Дальше решение пользователя из настроек уважаем и
+       * больше не переспрашиваем.
+       */
+      const stored = await getSetting(NOTIFICATIONS_SETTING);
+      let notificationsOn = stored === "1";
+      if (stored === null) {
+        notificationsOn = (await requestPermission()) === "granted";
+        await setSetting(NOTIFICATIONS_SETTING, notificationsOn ? "1" : "0");
+      } else if (notificationsOn && (await getPermissionState()) !== "granted") {
+        // Разрешение могли отозвать в настройках телефона — тогда выключатель
+        // обманывал бы, показывая «включено».
+        notificationsOn = false;
+        await setSetting(NOTIFICATIONS_SETTING, "0");
+      }
+      notificationsRef.current = notificationsOn;
+      if (!cancelled) setNotificationsEnabled(notificationsOn);
 
       const storedContacts = await listContacts();
       if (cancelled) return;
@@ -303,10 +330,15 @@ export function AppProvider({
             !(appActiveRef.current && activeChatRef.current === payload.chatId)
               ? (contentType, plaintext) => {
                   const sender = contactsRef.current.find((c) => c.userId === payload.fromUserId);
-                  void showIncoming({
+                  // catch обязателен: исключение отсюда ушло бы в unhandled
+                  // rejection и молча потеряло не только уведомление, но и
+                  // всякий след того, что оно вообще пыталось показаться.
+                  showIncoming({
                     chatId: payload.chatId,
                     title: sender ? (sender.localName ?? sender.displayName) : "Новое сообщение",
                     body: describeForNotification(contentType, plaintext),
+                  }).catch((error: unknown) => {
+                    console.warn("уведомление не показано", error);
                   });
                 }
               : undefined,
@@ -314,11 +346,17 @@ export function AppProvider({
       });
 
       ws.events.on("msgAccepted", (payload) => {
-        void updateMessageStatus(payload.clientMsgId, "sent").then((changed) => {
-          // Статус двигается только вперёд, и если ничего не изменилось —
-          // перерисовывать экраны не нужно.
-          if (changed) chatEvents.emit("messageStatusChanged", payload.chatId, payload.clientMsgId);
-        });
+        void (async () => {
+          const statusChanged = await updateMessageStatus(payload.clientMsgId, "sent");
+          // Время выравниваем по серверному: только так порядок переписки
+          // совпадает у обеих сторон (см. updateMessageTime).
+          const timeChanged =
+            payload.ts !== undefined && (await updateMessageTime(payload.clientMsgId, payload.ts));
+          // Сдвиг времени меняет порядок в списке, поэтому это не «изменился
+          // статус», а «список надо перечитать целиком».
+          if (timeChanged) chatEvents.emit("messageInserted", payload.chatId);
+          else if (statusChanged) chatEvents.emit("messageStatusChanged", payload.chatId, payload.clientMsgId);
+        })();
       });
 
       ws.events.on("ackRelay", (payload) => {

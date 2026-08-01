@@ -73,6 +73,11 @@ export interface MsgAcceptedPayload {
   msgId: string;
   /** Нужен, чтобы обновить только тот экран, которого касается сообщение. */
   chatId: string;
+  /**
+   * Время, присвоенное сервером. Может отсутствовать: старый сервер его не
+   * присылал, и тогда остаётся местное время отправителя.
+   */
+  ts?: number;
 }
 
 export interface MsgDeliverPayload {

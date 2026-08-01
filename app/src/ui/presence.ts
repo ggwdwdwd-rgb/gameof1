@@ -7,7 +7,11 @@ import type { Presence } from "../context/AppContext";
 export function describePresence(presence: Presence | undefined): string {
   if (!presence) return "";
   if (presence.online) return "в сети";
-  if (presence.lastSeenAt === null) return "";
+  // Времени последнего появления может не быть: человек ни разу не заходил
+  // после обновления сервера. Раньше в этом случае подпись была пустой, и в
+  // шапке чата не появлялось вообще ничего — выглядело как «онлайн не
+  // показывается».
+  if (presence.lastSeenAt === null) return "не в сети";
 
   const seen = new Date(presence.lastSeenAt);
   const now = new Date();

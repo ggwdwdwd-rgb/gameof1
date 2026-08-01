@@ -52,6 +52,32 @@ function formatDay(ts: number): string {
   return date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }
 
+/** Границы картинки в пузыре: как в мессенджерах — по ширине, но не во весь экран. */
+const IMAGE_WIDTH = 244;
+const IMAGE_MIN_HEIGHT = 130;
+const IMAGE_MAX_HEIGHT = 340;
+
+/**
+ * Размер картинки по её пропорциям.
+ *
+ * Раньше здесь стоял жёсткий квадрат 238×238 с resizeMode="cover" — то есть
+ * любое фото обрезалось до квадрата. На вертикальном скриншоте это выглядело
+ * сломанной вёрсткой: от картинки оставалась случайная полоса середины, а
+ * пузырь не совпадал с ней по размеру. Теперь высота считается от пропорций и
+ * зажимается в разумные границы: панорама не превращается в нитку, а
+ * скриншот телефона не занимает весь экран.
+ *
+ * Если размеров нет (фото из старых версий), берём 4:3 — это заметно ближе к
+ * типичной фотографии, чем квадрат.
+ */
+function imageSize(width: number | undefined, height: number | undefined): { width: number; height: number } {
+  const ratio = width && height && width > 0 ? height / width : 3 / 4;
+  return {
+    width: IMAGE_WIDTH,
+    height: Math.round(Math.min(IMAGE_MAX_HEIGHT, Math.max(IMAGE_MIN_HEIGHT, IMAGE_WIDTH * ratio))),
+  };
+}
+
 function formatSeconds(total: number): string {
   const minutes = Math.floor(total / 60);
   const seconds = total % 60;
@@ -225,7 +251,7 @@ function MessageContent({
     const localUri = meta.localUri;
     return (
       <Pressable onPress={() => onOpenImage(localUri)}>
-        <Image source={{ uri: localUri }} style={styles.image} resizeMode="cover" />
+        <Image source={{ uri: localUri }} style={[styles.image, imageSize(meta.width, meta.height)]} resizeMode="cover" />
       </Pressable>
     );
   }
@@ -465,7 +491,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.42)",
   },
   time: { fontSize: 11.5 },
-  image: { width: 238, height: 238, borderRadius: 17 },
+  image: { borderRadius: 17 },
   fileRow: { flexDirection: "row", alignItems: "center", gap: 11, minWidth: 190, paddingVertical: 2 },
   fileIconCircle: {
     width: 40,
