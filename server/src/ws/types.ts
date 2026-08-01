@@ -70,6 +70,11 @@ export interface MsgDeletePayload {
   chatId: string;
 }
 
+/** Удаление участника из системы. Разрешено только первому зарегистрированному. */
+export interface MemberRemovePayload {
+  userId: string;
+}
+
 export function isEnvelope(value: unknown): value is Envelope {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;

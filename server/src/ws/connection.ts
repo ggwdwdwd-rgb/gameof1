@@ -9,8 +9,10 @@ import { createInvite } from "../invites.js";
 import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from "./handlers/message.js";
 import { getRosterExcluding, touchLastSeen } from "./handlers/roster.js";
 import { updateDisplayName } from "./handlers/profile.js";
+import { deviceIdsOf, isAdmin, removeUser, userExists } from "../users.js";
 import {
   broadcastToAllExcept,
+  closeDevices,
   hasOtherConnections,
   registerConnection,
   send,
@@ -26,6 +28,7 @@ import {
   type InviteRedeemPayload,
   type MsgAckPayload,
   type MsgDeletePayload,
+  type MemberRemovePayload,
   type MsgSendPayload,
   type ProfileUpdatePayload,
   type TypingPayload,
@@ -80,7 +83,18 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           state = { stage: "authenticated", userId: result.userId, deviceId: result.deviceId };
           registerConnection(result.deviceId, result.userId, socket);
           touchLastSeen(result.userId);
-          send(socket, envelope("auth.ok", { userId: result.userId, deviceId: result.deviceId, serverTime: Date.now() }));
+          // isAdmin — чтобы клиент знал, показывать ли удаление участников.
+          // Признак вычисляется сервером: доверять клиенту в этом нельзя, но и
+          // прятать его незачем — проверка всё равно повторяется при удалении.
+          send(
+            socket,
+            envelope("auth.ok", {
+              userId: result.userId,
+              deviceId: result.deviceId,
+              serverTime: Date.now(),
+              isAdmin: isAdmin(result.userId),
+            }),
+          );
           // roster формируем уже после registerConnection, иначе сам подключившийся
           // не увидел бы себя онлайн у остальных в первый момент.
           send(socket, envelope("roster.snapshot", { members: getRosterExcluding(result.deviceId) }));
@@ -103,7 +117,7 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           state = { stage: "authenticated", userId: result.userId, deviceId: payload.deviceId };
           registerConnection(payload.deviceId, result.userId, socket);
           touchLastSeen(result.userId);
-          send(socket, envelope("invite.redeem.ok", { userId: result.userId }));
+          send(socket, envelope("invite.redeem.ok", { userId: result.userId, isAdmin: isAdmin(result.userId) }));
           send(socket, envelope("roster.snapshot", { members: getRosterExcluding(payload.deviceId) }));
           broadcastToAllExcept(
             payload.deviceId,
@@ -200,6 +214,35 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           sendToDevice(recipientDeviceId, envelope("msg.deleted", { msgId: payload.msgId, chatId: result.chatId, byUserId: userId }));
         }
         send(socket, envelope("msg.deleted", { msgId: payload.msgId, chatId: result.chatId, byUserId: userId }));
+        return;
+      }
+
+      if (parsed.type === "member.remove") {
+        const payload = parsed.payload as MemberRemovePayload;
+        // Право одно и только одно: распоряжаться составом может тот, кто
+        // поднял сервер, то есть первый зарегистрированный участник.
+        if (!isAdmin(userId)) {
+          send(socket, envelope("error", { code: "NOT_ADMIN", message: "Удалять участников может только первый участник" }));
+          return;
+        }
+        if (payload.userId === userId) {
+          send(socket, envelope("error", { code: "CANNOT_REMOVE_SELF", message: "Себя удалить нельзя" }));
+          return;
+        }
+        if (!userExists(payload.userId)) {
+          send(socket, envelope("error", { code: "NO_SUCH_USER", message: "Такого участника нет" }));
+          return;
+        }
+
+        // deviceId собираем до удаления: после него в базе их уже не найти.
+        const devices = deviceIdsOf(payload.userId);
+        const stats = removeUser(payload.userId);
+        // Сначала оповещаем остальных, потом рвём соединения удалённого:
+        // иначе он получил бы сообщение о собственном удалении и обиделся бы
+        // зря — а главное, порядок здесь не важен никому, кроме читателя.
+        broadcastToAllExcept(null, envelope("member.removed", { userId: payload.userId }));
+        closeDevices(devices);
+        log.warn({ userId: payload.userId, by: userId, ...stats }, "участник удалён");
         return;
       }
 

@@ -107,6 +107,11 @@ interface AppContextData {
   notificationsEnabled: boolean;
   /** Имя, которым участника видят остальные (может измениться без перезапуска). */
   displayName: string;
+  /**
+   * Можно ли распоряжаться составом. Приходит от сервера (первый
+   * зарегистрированный участник) — клиент только показывает кнопку.
+   */
+  isAdmin: boolean;
 }
 
 /** Действия: их идентичность не меняется, поэтому эффекты экранов стабильны. */
@@ -135,6 +140,8 @@ interface AppActions {
   setNotificationsEnabled: (enabled: boolean) => Promise<void>;
   /** Какой чат открыт на экране: для него уведомление не показываем. */
   setActiveChat: (chatId: string | null) => void;
+  /** Удаление участника из системы — доступно только админу. */
+  removeMember: (userId: string) => Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Самопроверка отправки по шагам — см. runSelfTest. */
   selfTest: () => Promise<SelfTestStep[]>;
 }
@@ -189,6 +196,7 @@ export function AppProvider({
   const [myFingerprint, setMyFingerprint] = useState("");
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [displayName, setDisplayName] = useState(identity.displayName);
+  const [isAdmin, setIsAdmin] = useState(false);
   /**
    * Присутствие не храним в локальной базе: оно живёт только пока есть
    * соединение, и после перезапуска всё равно приходит заново в roster.
@@ -255,6 +263,10 @@ export function AppProvider({
         })();
       });
       ws.events.on("failure", setConnectionFailure);
+      // Права приходят от сервера при каждом подключении: состав участников
+      // мог измениться, и «первым» после удаления может стать другой человек.
+      ws.events.on("authOk", (payload) => setIsAdmin(payload.isAdmin === true));
+      ws.events.on("inviteOk", (payload) => setIsAdmin(payload.isAdmin === true));
 
       async function upsertAndTrack(member: RosterMemberPayload): Promise<Contact> {
         const contact = contactFromRoster(crypto, member, contactsRef.current.find((c) => c.userId === member.userId));
@@ -362,6 +374,23 @@ export function AppProvider({
           encryptionPublicKey: existing.encryptionPublicKey,
           joinedAt: 0,
         });
+      });
+
+      /**
+       * Участника удалили — убираем его и переписку с ним локально.
+       *
+       * То же самое делает сверка с roster при подключении, но событие приходит
+       * сразу: чат исчезает у всех, кто в этот момент в приложении, а не после
+       * следующего запуска.
+       */
+      ws.events.on("memberRemoved", (payload) => {
+        void (async () => {
+          await deleteContactWithChat(payload.userId, dmChatId(identity.userId, payload.userId));
+          contactsRef.current = contactsRef.current.filter((c) => c.userId !== payload.userId);
+          setContacts(contactsRef.current);
+          setPresence((prev) => new Map([...prev].filter(([id]) => id !== payload.userId)));
+          chatEvents.emit("messageInserted", dmChatId(identity.userId, payload.userId));
+        })();
       });
 
       ws.events.on("msgDeliver", (payload) => {
@@ -654,6 +683,42 @@ export function AppProvider({
         contactsRef.current = contactsRef.current.map((c) => (c.userId === userId ? { ...c, localName: value } : c));
         setContacts(contactsRef.current);
       },
+      async removeMember(userId) {
+        const ws = wsRef.current;
+        if (!ws || !(await ws.waitUntilReady(WAIT_READY_MS))) {
+          return { ok: false, detail: "нет соединения с сервером" };
+        }
+
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (result: { ok: true } | { ok: false; detail: string }): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offRemoved();
+            offError();
+            resolve(result);
+          };
+
+          const timer = setTimeout(() => finish({ ok: false, detail: "сервер не ответил" }), 12_000);
+          const offRemoved = ws.events.on("memberRemoved", (payload) => {
+            if (payload.userId === userId) finish({ ok: true });
+          });
+          // Отказ разбираем по коду: «нельзя» и «старый сервер не знает такой
+          // пакет» требуют разных объяснений.
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") {
+              finish({ ok: false, detail: "сервер устарел — обновите его" });
+              return;
+            }
+            if (["NOT_ADMIN", "CANNOT_REMOVE_SELF", "NO_SUCH_USER"].includes(payload.code)) {
+              finish({ ok: false, detail: payload.message });
+            }
+          });
+
+          if (!ws.removeMember(userId)) finish({ ok: false, detail: "пакет не удалось отправить" });
+        });
+      },
       async setNotificationsEnabled(enabled) {
         notificationsRef.current = enabled;
         setNotificationsEnabled(enabled);
@@ -806,6 +871,7 @@ export function AppProvider({
       myFingerprint,
       notificationsEnabled,
       displayName,
+      isAdmin,
       ...actions,
     }),
     [
@@ -818,6 +884,7 @@ export function AppProvider({
       myFingerprint,
       notificationsEnabled,
       displayName,
+      isAdmin,
       actions,
     ],
   );

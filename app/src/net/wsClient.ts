@@ -13,6 +13,7 @@ import {
   type InviteRedeemErrorPayload,
   type InviteRedeemOkPayload,
   type MemberJoinedPayload,
+  type MemberRemovedPayload,
   type MemberUpdatedPayload,
   type PresencePayload,
   type MsgAcceptedPayload,
@@ -59,6 +60,7 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   roster: (payload: RosterSnapshotPayload) => void;
   memberJoined: (payload: MemberJoinedPayload) => void;
   memberUpdated: (payload: MemberUpdatedPayload) => void;
+  memberRemoved: (payload: MemberRemovedPayload) => void;
   presence: (payload: PresencePayload) => void;
   msgDeliver: (payload: MsgDeliverPayload) => void;
   msgAccepted: (payload: MsgAcceptedPayload) => void;
@@ -135,6 +137,12 @@ export class WsClient {
   ackMessage(msgId: string, chatId: string, status: "delivered" | "read"): boolean {
     if (!this.ws) return false;
     return this.rawSend(this.ws, "msg.ack", { msgId, chatId, status });
+  }
+
+  /** Удаление участника из системы. false, если пакет не ушёл. */
+  removeMember(userId: string): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "member.remove", { userId });
   }
 
   /** Смена своего отображаемого имени. false, если пакет не ушёл. */
@@ -219,6 +227,9 @@ export class WsClient {
         return;
       case "member.updated":
         this.events.emit("memberUpdated", parsed.payload as MemberUpdatedPayload);
+        return;
+      case "member.removed":
+        this.events.emit("memberRemoved", parsed.payload as MemberRemovedPayload);
         return;
       case "presence":
         this.events.emit("presence", parsed.payload as PresencePayload);

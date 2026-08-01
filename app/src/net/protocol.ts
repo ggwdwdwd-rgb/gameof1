@@ -18,6 +18,13 @@ export interface AuthOkPayload {
   userId: string;
   deviceId: string;
   serverTime: number;
+  /**
+   * Можно ли распоряжаться составом участников. Считает сервер (первый
+   * зарегистрированный), клиент только показывает или скрывает кнопку —
+   * проверка всё равно повторяется при самом удалении. Может отсутствовать:
+   * старый сервер этого поля не присылал.
+   */
+  isAdmin?: boolean;
 }
 
 export interface AuthErrorPayload {
@@ -26,6 +33,7 @@ export interface AuthErrorPayload {
 
 export interface InviteRedeemOkPayload {
   userId: string;
+  isAdmin?: boolean;
 }
 
 export interface InviteRedeemErrorPayload {
@@ -122,6 +130,11 @@ export interface PresencePayload {
 export interface MemberUpdatedPayload {
   userId: string;
   displayName: string;
+}
+
+/** Участника удалили из системы — его чат и переписку нужно убрать локально. */
+export interface MemberRemovedPayload {
+  userId: string;
 }
 
 export interface TypingPayload {

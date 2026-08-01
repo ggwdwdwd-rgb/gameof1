@@ -125,7 +125,7 @@ function dmChatId(a, b) {
 const cliCode = process.argv[2];
 const alice = new Client("Алиса");
 await alice.open();
-await alice.redeem(cliCode);
+const aliceAuth = await alice.redeem(cliCode);
 check("регистрация первого участника по CLI-коду", Boolean(alice.userId));
 
 const rosterA = await alice.wait("roster.snapshot");
@@ -343,7 +343,7 @@ bob2.identity = bob.identity;
 bob2.encryption = bob.encryption;
 bob2.userId = bob.userId;
 await bob2.open();
-await bob2.authenticate();
+const bob2Auth = await bob2.authenticate();
 check("повторный вход по подписи устройства", true);
 
 bob2.send("history.fetch", { chatId, sinceTs: 0, limit: 200 });
@@ -364,6 +364,49 @@ check("не автор не может удалить сообщение", notOw
 alice.send("msg.delete", { msgId: clientMsgId, chatId });
 const deleted = await bob2.wait("msg.deleted", (m) => m.payload.msgId === clientMsgId);
 check("автор удаляет сообщение у всех", Boolean(deleted));
+
+// ── 11b. Удаление участника — только первым зарегистрированным ──────────────
+// Алиса зарегистрировалась первой, значит распоряжаться составом может только
+// она. Права здесь важнее всего остального: ошибка означает, что любой
+// участник может выкинуть любого.
+check("сервер сообщил Алисе, что она админ", aliceAuth.payload.isAdmin === true, String(aliceAuth.payload.isAdmin));
+check("Боб админом не считается", bob2Auth.payload.isAdmin !== true, String(bob2Auth.payload.isAdmin));
+
+bob2.send("member.remove", { userId: alice.userId });
+const notAdmin = await bob2.wait("error", (m) => m.payload.code === "NOT_ADMIN");
+check("не админ не может удалить участника", notAdmin.payload.code === "NOT_ADMIN");
+
+alice.send("member.remove", { userId: alice.userId });
+const removeSelf = await alice.wait("error", (m) => m.payload.code === "CANNOT_REMOVE_SELF");
+check("себя удалить нельзя", removeSelf.payload.code === "CANNOT_REMOVE_SELF");
+
+alice.send("member.remove", { userId: "нет-такого" });
+const noUser = await alice.wait("error", (m) => m.payload.code === "NO_SUCH_USER");
+check("несуществующего участника удалить нельзя", noUser.payload.code === "NO_SUCH_USER");
+
+// Само удаление проверяем последним: после него Боба в системе нет.
+alice.send("member.remove", { userId: bob.userId });
+const memberRemoved = await alice.wait("member.removed", (m) => m.payload.userId === bob.userId);
+check("админ удаляет участника, остальные получают member.removed", Boolean(memberRemoved));
+
+// Соединение удалённого рвётся сразу: иначе он остался бы «на связи» и мог бы
+// отправлять сообщения, хотя устройства в базе уже нет.
+await new Promise((r) => setTimeout(r, 400));
+check("соединение удалённого участника разорвано", bob2.ws.readyState !== bob2.ws.OPEN, `readyState=${bob2.ws.readyState}`);
+
+// Повторный вход тем же устройством теперь невозможен — записи нет.
+const ghost = new Client("Боб-призрак");
+ghost.deviceId = bob.deviceId;
+ghost.identity = bob.identity;
+await ghost.open();
+await ghost.wait("auth.challenge");
+ghost.send("auth.response", {
+  deviceId: ghost.deviceId,
+  signature: crypto.signDetached((await ghost.wait("auth.challenge")).payload.nonce, ghost.identity.secretKey),
+});
+const ghostError = await ghost.wait("auth.error");
+check("удалённое устройство больше не входит", ghostError.payload.code === "UNKNOWN_DEVICE", ghostError.payload.code);
+ghost.ws.close();
 
 // ── 12. Неизвестный тип пакета ──────────────────────────────────────────────
 alice.send("totally.unknown", {});

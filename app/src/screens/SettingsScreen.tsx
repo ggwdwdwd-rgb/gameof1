@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { describeFailure, useApp } from "../context/AppContext";
@@ -7,6 +7,7 @@ import { countMessages } from "../db/messages";
 import { countOutbox } from "../db/outbox";
 import { useTheme, useThemePreference } from "../theme/ThemeContext";
 import type { Theme, ThemePreference } from "../theme/theme";
+import { ActionSheet, type SheetAction } from "../ui/ActionSheet";
 import { Avatar } from "../ui/Avatar";
 import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
@@ -71,6 +72,8 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
     renameContact,
     presence,
     selfTest,
+    isAdmin,
+    removeMember,
   } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -86,6 +89,8 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
   const [permissionDenied, setPermissionDenied] = useState(false);
   /** Контакт, которому меняем своё название. */
   const [renaming, setRenaming] = useState<Contact | null>(null);
+  /** Контакт, для которого открыт лист действий. */
+  const [menuFor, setMenuFor] = useState<Contact | null>(null);
 
   /**
    * Диагностика. Когда «на связи», но сообщения не ходят, по экрану этого не
@@ -177,6 +182,52 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
       Alert.alert("Уведомление не показалось", error instanceof Error ? error.message : String(error));
     }
   }, []);
+
+  /**
+   * Удаление участника. Спрашиваем подтверждение: действие необратимо и
+   * затрагивает всех — у каждого исчезнет чат с этим человеком.
+   */
+  const confirmRemove = useCallback(
+    (contact: Contact) => {
+      Alert.alert(
+        `Удалить ${contactTitle(contact)}?`,
+        "Участник исчезнет у всех вместе с перепиской. Вернуть его можно только новым кодом приглашения — и это будет уже новый человек с новыми ключами.",
+        [
+          { text: "Отмена", style: "cancel" },
+          {
+            text: "Удалить",
+            style: "destructive",
+            onPress: () => {
+              void (async () => {
+                const result = await removeMember(contact.userId);
+                if (!result.ok) Alert.alert("Участник не удалён", result.detail);
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [removeMember],
+  );
+
+  const memberActions = useMemo((): SheetAction[] => {
+    const contact = menuFor;
+    if (!contact) return [];
+    const actions: SheetAction[] = [
+      { label: "Переименовать у себя", icon: "edit", onPress: () => setRenaming(contact) },
+    ];
+    // Кнопка только у админа: у остальных сервер всё равно откажет, и показывать
+    // её означало бы предлагать заведомо невозможное.
+    if (isAdmin) {
+      actions.push({
+        label: "Удалить участника",
+        icon: "trash",
+        destructive: true,
+        onPress: () => confirmRemove(contact),
+      });
+    }
+    return actions;
+  }, [menuFor, isAdmin, confirmRemove]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -430,7 +481,7 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
                     index > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
                     pressed && { backgroundColor: theme.colors.surfacePressed },
                   ]}
-                  onPress={() => setRenaming(contact)}
+                  onPress={() => setMenuFor(contact)}
                 >
                   <Avatar
                     name={contactTitle(contact)}
@@ -459,7 +510,9 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
 
         {activeContacts.length > 0 && (
           <Text style={[styles.hint, { color: theme.colors.textMuted, marginLeft: 6 }]}>
-            Нажмите на участника, чтобы подписать его по-своему — это название видно только на вашем устройстве.
+            {isAdmin
+              ? "Нажмите на участника, чтобы подписать его по-своему или удалить из мессенджера."
+              : "Нажмите на участника, чтобы подписать его по-своему — это название видно только на вашем устройстве."}
           </Text>
         )}
 
@@ -467,6 +520,13 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
           Cry · сообщения шифруются на устройстве, сервер видит только зашифрованные блобы и удаляет их после доставки.
         </Text>
       </ScrollView>
+
+      <ActionSheet
+        visible={menuFor !== null}
+        title={menuFor ? contactTitle(menuFor) : undefined}
+        actions={memberActions}
+        onClose={() => setMenuFor(null)}
+      />
 
       <RenameModal
         visible={renaming !== null}

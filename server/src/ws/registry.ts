@@ -69,3 +69,19 @@ export function sendToDevice(deviceId: string, envelope: Envelope): boolean {
 export function connectedDeviceCount(): number {
   return connections.size;
 }
+
+/**
+ * Разрывает соединения перечисленных устройств.
+ *
+ * Нужно после удаления участника: его устройства из базы уже исчезли, но
+ * открытый сокет продолжал бы работать до перезапуска — удалённый участник
+ * оставался бы «на связи» и мог бы отправлять сообщения.
+ */
+export function closeDevices(deviceIds: string[]): void {
+  for (const deviceId of deviceIds) {
+    const conn = connections.get(deviceId);
+    if (!conn) continue;
+    connections.delete(deviceId);
+    conn.socket.close(4003, "участник удалён");
+  }
+}
