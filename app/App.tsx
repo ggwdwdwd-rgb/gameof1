@@ -1,5 +1,5 @@
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppProvider } from "./src/context/AppContext";
@@ -10,6 +10,7 @@ import { OnboardingScreen } from "./src/screens/OnboardingScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { loadIdentity, type DeviceIdentity } from "./src/storage/identity";
 import { ThemeProvider, useTheme } from "./src/theme/ThemeContext";
+import { CrashScreen, useCrashHandler } from "./src/ui/CrashScreen";
 import { LogoMark } from "./src/ui/LogoMark";
 import { ScreenTransition } from "./src/ui/ScreenTransition";
 
@@ -24,6 +25,7 @@ function Root(): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [identity, setIdentity] = useState<DeviceIdentity | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "chatList" });
+  const { crash, clear } = useCrashHandler();
 
   useEffect(() => {
     void loadIdentity().then((stored) => {
@@ -32,16 +34,36 @@ function Root(): React.ReactElement {
     });
   }, []);
 
-  // Аппаратная кнопка «назад» закрывает открытый экран, а не приложение.
-  // Без обработчика Android выходил из Cry прямо из чата или настроек.
+  /**
+   * Аппаратная кнопка «назад» закрывает открытый экран, а не приложение.
+   *
+   * Подписываемся один раз за всё время жизни, а текущий экран читаем из рефа.
+   * Раньше эффект зависел от screen.name, то есть на каждом переходе снимал и
+   * ставил обработчик заново — лишняя работа там, где ошибка стоит дорого:
+   * промах означает выход из приложения.
+   */
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
+
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (screen.name === "chatList") return false; // из списка чатов — выход, как и ожидается
+      if (screenRef.current.name === "chatList") return false; // из списка чатов — выход, как и ожидается
       setScreen({ name: "chatList" });
       return true;
     });
     return () => subscription.remove();
-  }, [screen.name]);
+  }, []);
+
+  // Экран ошибки — раньше всего остального: если приложение поймало фатальную
+  // ошибку, показывать надо её, а не пытаться рисовать сломанное состояние.
+  if (crash !== null) {
+    return (
+      <>
+        <CrashScreen message={crash} onDismiss={clear} />
+        <StatusBar style={theme.colors.statusBar} />
+      </>
+    );
+  }
 
   if (loading) {
     return (

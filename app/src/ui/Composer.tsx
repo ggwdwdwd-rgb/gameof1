@@ -5,6 +5,7 @@ import {
   setAudioModeAsync,
   useAudioRecorder,
   useAudioRecorderState,
+  type AudioRecorder,
 } from "expo-audio";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -97,7 +98,37 @@ function ComposerBase({
   const [attachOpen, setAttachOpen] = useState(false);
   const typingStopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /**
+   * Остановка записи при закрытии экрана.
+   *
+   * Эффект объявлен ДО useAudioRecorder намеренно. React вызывает функции
+   * очистки в том порядке, в котором объявлены эффекты, а useAudioRecorder
+   * внутри себя тоже регистрирует эффект — тот освобождает нативный объект
+   * рекордера. Если бы эта очистка стояла после, она обращалась бы к уже
+   * освобождённому объекту: обращение к нему бросает исключение, а исключение
+   * из очистки при размонтировании — это фатальная ошибка JS, от которой
+   * приложение на Android просто закрывается. Именно так и получалось: нажимаешь
+   * «назад» из чата — приложение выходит целиком, иногда успев показать ошибку.
+   *
+   * Рекордер берём из рефа, потому что на момент объявления его ещё нет.
+   */
+  const recorderRef = useRef<AudioRecorder | null>(null);
+  useEffect(
+    () => () => {
+      holdingRef.current = false;
+      const current = recorderRef.current;
+      if (!current) return;
+      try {
+        if (current.isRecording) void current.stop().then(leaveRecordingMode, () => undefined);
+      } catch {
+        // Рекордер мог уже освободиться — терять из-за этого приложение нельзя.
+      }
+    },
+    [],
+  );
+
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  recorderRef.current = recorder;
   const recorderState = useAudioRecorderState(recorder);
 
   /** Идёт запись — влияет только на вид, решения принимаются по рефам. */
@@ -135,14 +166,8 @@ function ComposerBase({
   useEffect(
     () => () => {
       if (typingStopTimer.current) clearTimeout(typingStopTimer.current);
-      // Уходя с экрана с зажатой кнопкой, запись надо оборвать: иначе рекордер
-      // остаётся включённым и держит микрофон уже после закрытия чата.
-      holdingRef.current = false;
-      if (recorder.isRecording) {
-        void recorder.stop().then(leaveRecordingMode);
-      }
     },
-    [recorder],
+    [],
   );
 
   const handleDraftChange = useCallback(
