@@ -1,0 +1,139 @@
+# Управление сервером кнопкой в браузере — без консоли VPS и без SSH-клиента.
+#
+# Зачем: serial-консоль у хостера может просто не работать, а обновлять сервер и
+# смотреть его состояние нужно регулярно. Здесь то же самое запускается из
+# GitHub: Actions → «Сервер» → Run workflow → выбрать действие.
+#
+# Что нужно один раз положить в Settings → Secrets and variables → Actions:
+#   SERVER_HOST      — IP или домен сервера (обязательно)
+#   SERVER_PASSWORD  — пароль пользователя      \ достаточно одного из двух;
+#   SERVER_SSH_KEY   — приватный SSH-ключ целиком / ключ надёжнее пароля
+# Необязательные:
+#   SERVER_USER      — пользователь (по умолчанию root)
+#   SERVER_PORT      — порт SSH (по умолчанию 22)
+#   SERVER_PATH      — папка с проектом (по умолчанию ~/family-messenger)
+#
+# Ключ предпочтительнее: его можно отозвать, не меняя пароль от сервера. Но
+# чтобы положить публичный ключ на сервер, доступ к нему уже нужен — поэтому
+# пароль тоже поддерживается, им можно начать.
+name: Сервер
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Что сделать на сервере"
+        required: true
+        default: update
+        type: choice
+        options:
+          - update # git pull + пересборка контейнеров
+          - status # кто зарегистрирован, счётчики, коды
+          - users # список участников с их id
+          - remove-user # удалить участника (нужен user_id)
+          - logs # последние строки логов сервера
+          - invite # выпустить новый код приглашения
+      user_id:
+        description: "id участника — только для remove-user (взять из действия users)"
+        required: false
+        type: string
+
+# Значения по умолчанию для необязательных секретов задаём здесь, а не в
+# шагах: иначе пришлось бы повторять подстановку в каждой команде.
+env:
+  SSH_USER: ${{ secrets.SERVER_USER || 'root' }}
+  SSH_PORT: ${{ secrets.SERVER_PORT || '22' }}
+  PROJECT_DIR: ${{ secrets.SERVER_PATH || '~/family-messenger' }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Проверить, что секреты заданы
+        env:
+          HOST: ${{ secrets.SERVER_HOST }}
+          KEY: ${{ secrets.SERVER_SSH_KEY }}
+          PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          if [ -z "$HOST" ]; then
+            echo "::error::Не задан секрет SERVER_HOST (IP или домен сервера)."
+            exit 1
+          fi
+          if [ -z "$KEY" ] && [ -z "$PASSWORD" ]; then
+            echo "::error::Нужен хотя бы один из секретов: SERVER_SSH_KEY или SERVER_PASSWORD."
+            exit 1
+          fi
+
+      - name: Проверить аргументы действия
+        run: |
+          if [ "${{ inputs.action }}" = "remove-user" ] && [ -z "${{ inputs.user_id }}" ]; then
+            echo "::error::Для remove-user нужно указать user_id. Сначала запусти действие users и скопируй id."
+            exit 1
+          fi
+
+      - name: Подготовить доступ по SSH
+        env:
+          KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if [ -n "$KEY" ]; then
+            # printf, а не echo: ключ многострочный, и хвостовой перевод строки
+            # обязателен — без него ssh считает файл повреждённым.
+            printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+            chmod 600 ~/.ssh/id_deploy
+            echo "SSH_AUTH=key" >> "$GITHUB_ENV"
+          else
+            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+            echo "SSH_AUTH=password" >> "$GITHUB_ENV"
+          fi
+
+      - name: Выполнить действие
+        env:
+          HOST: ${{ secrets.SERVER_HOST }}
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          # Что именно выполнить на сервере. Внутри контейнера зовём собранный
+          # JS (dist), а не npm run: скрипты через tsx работают, но собранный
+          # код запускается сразу и не зависит от dev-зависимостей.
+          case "${{ inputs.action }}" in
+            update)
+              REMOTE="cd $PROJECT_DIR && git pull && docker compose up -d --build && docker compose ps && docker compose logs --tail=30 server"
+              ;;
+            status)
+              REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/status.js"
+              ;;
+            users)
+              REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/remove-user.js"
+              ;;
+            remove-user)
+              REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/remove-user.js --user='${{ inputs.user_id }}'"
+              ;;
+            logs)
+              REMOTE="cd $PROJECT_DIR && docker compose logs --tail=120 server"
+              ;;
+            invite)
+              REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/create-invite.js"
+              ;;
+            *)
+              echo "::error::Неизвестное действие: ${{ inputs.action }}"
+              exit 1
+              ;;
+          esac
+
+          # accept-new: отпечаток сервера запоминается при первом подключении.
+          # Строгая проверка требовала бы заранее положить known_hosts, а
+          # выигрыш здесь невелик — соединение всё равно шифрованное.
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -p $SSH_PORT"
+
+          if [ "$SSH_AUTH" = "key" ]; then
+            ssh $SSH_OPTS -i ~/.ssh/id_deploy "$SSH_USER@$HOST" "$REMOTE"
+          else
+            sshpass -e ssh $SSH_OPTS "$SSH_USER@$HOST" "$REMOTE"
+          fi
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
