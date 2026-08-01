@@ -13,6 +13,7 @@ import { Icon, type IconName } from "../ui/Icon";
 import { RenameModal } from "../ui/RenameModal";
 import { describePresence } from "../ui/presence";
 import { getPermissionState, requestPermission, showTest } from "../notify/notifications";
+import type { SelfTestStep } from "../context/AppContext";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: IconName }[] = [
   { value: "light", label: "Светлая", icon: "sun" },
@@ -69,6 +70,7 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
     renameSelf,
     renameContact,
     presence,
+    selfTest,
   } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -95,6 +97,23 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
   const refreshDiag = useCallback(async () => {
     setDiag({ outbox: await countOutbox(), messages: await countMessages() });
   }, []);
+
+  /** Результат самопроверки по шагам: видно, на каком именно всё встаёт. */
+  const [steps, setSteps] = useState<SelfTestStep[] | null>(null);
+  const [testing, setTesting] = useState(false);
+  const runSelfTest = useCallback(async () => {
+    setTesting(true);
+    try {
+      setSteps(await selfTest());
+      await refreshDiag();
+    } catch (error) {
+      setSteps([
+        { name: "Самопроверка", ok: false, detail: error instanceof Error ? error.message : String(error) },
+      ]);
+    } finally {
+      setTesting(false);
+    }
+  }, [selfTest, refreshDiag]);
 
   useEffect(() => {
     void getPermissionState().then((state) => setPermissionDenied(state === "denied"));
@@ -351,15 +370,42 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
               скорее всего, на нём старая версия. Ноль участников означает, что не разобрался список участников, и тогда
               шифровать сообщения не для кого.
             </Text>
+            {steps !== null && (
+              <View style={styles.steps}>
+                {steps.map((step) => (
+                  <View key={step.name} style={styles.stepRow}>
+                    <Icon
+                      name={step.ok ? "check" : "alert"}
+                      size={16}
+                      color={step.ok ? theme.colors.success : theme.colors.danger}
+                    />
+                    <Text style={[styles.stepText, { color: theme.colors.textPrimary }]}>
+                      {step.name}
+                      {step.detail !== "" && (
+                        <Text style={{ color: theme.colors.textMuted }}>{` — ${step.detail}`}</Text>
+                      )}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
             <Pressable
               style={({ pressed }) => [
                 styles.reconnectButton,
                 { backgroundColor: theme.colors.accentSoft, opacity: pressed ? 0.7 : 1 },
               ]}
-              onPress={() => void refreshDiag()}
+              onPress={() => void runSelfTest()}
+              disabled={testing}
             >
-              <Icon name="refresh" size={18} color={theme.colors.accent} />
-              <Text style={[styles.reconnectText, { color: theme.colors.accent }]}>Обновить</Text>
+              {testing ? (
+                <ActivityIndicator color={theme.colors.accent} />
+              ) : (
+                <>
+                  <Icon name="refresh" size={18} color={theme.colors.accent} />
+                  <Text style={[styles.reconnectText, { color: theme.colors.accent }]}>Проверить отправку</Text>
+                </>
+              )}
             </Pressable>
           </View>
         </Card>
@@ -487,6 +533,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   reconnectText: { fontSize: 15, fontWeight: "600" },
+  steps: { marginTop: 12, gap: 7 },
+  stepRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  stepText: { flex: 1, fontSize: 13, lineHeight: 18 },
   diagRow: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 12, paddingVertical: 4 },
   diagLabel: { fontSize: 14 },
   diagValue: { fontSize: 14, fontWeight: "600" },

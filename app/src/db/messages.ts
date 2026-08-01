@@ -102,6 +102,12 @@ export async function updateMessageTime(clientMsgId: string, createdAt: number):
   return result.changes > 0;
 }
 
+/** Физическое удаление строки — нужно самопроверке, чтобы не оставлять мусор. */
+export async function hardDeleteMessage(clientMsgId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("DELETE FROM messages WHERE client_msg_id = ?", [clientMsgId]);
+}
+
 /** Сколько сообщений всего лежит локально — для диагностики. */
 export async function countMessages(): Promise<number> {
   const db = await getDb();

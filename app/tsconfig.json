@@ -2,5 +2,9 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true
-  }
+  },
+  // scripts/** — проверочные скрипты для Node (sqlite, ws, чтение файлов).
+  // Их проверяет запуск, а не tsc клиента: типов Node здесь нет, и подтягивать
+  // их в приложение только ради скриптов не нужно.
+  "exclude": ["scripts"]
 }

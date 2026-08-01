@@ -4,6 +4,7 @@ import { createCrypto } from "@family-messenger/crypto";
 import { getCrypto } from "../crypto/sodium";
 import { listContacts, setContactLocalName, upsertContact, type Contact } from "../db/contacts";
 import {
+  hardDeleteMessage,
   insertMessage,
   listMessagesForChat,
   markChatRead,
@@ -122,6 +123,15 @@ interface AppActions {
   setNotificationsEnabled: (enabled: boolean) => Promise<void>;
   /** Какой чат открыт на экране: для него уведомление не показываем. */
   setActiveChat: (chatId: string | null) => void;
+  /** Самопроверка отправки по шагам — см. runSelfTest. */
+  selfTest: () => Promise<SelfTestStep[]>;
+}
+
+/** Один шаг самопроверки: что проверяли, получилось ли и подробности. */
+export interface SelfTestStep {
+  name: string;
+  ok: boolean;
+  detail: string;
 }
 
 type AppContextValue = AppContextData & AppActions;
@@ -615,6 +625,87 @@ export function AppProvider({
       },
       setActiveChat(chatId) {
         activeChatRef.current = chatId;
+      },
+      /**
+       * Самопроверка отправки по шагам.
+       *
+       * Тот же путь, что у настоящего сообщения: крипто → соединение →
+       * контакты → шифрование → запись в базу → ответ сервера. Нужна потому,
+       * что «сообщения не идут» — это симптом сразу шести разных причин, и по
+       * экрану они не отличаются. Ничего никому не отправляет: вместо msg.send
+       * используется запрос истории, то есть проверяется тот же круг
+       * «отправили пакет — сервер ответил», но без сообщения у собеседника.
+       */
+      async selfTest() {
+        const steps: SelfTestStep[] = [];
+        const add = (name: string, ok: boolean, detail = ""): void => {
+          steps.push({ name, ok, detail });
+        };
+
+        const crypto = cryptoRef.current;
+        add("Шифрование загружено", crypto !== null, crypto ? "" : "libsodium не инициализировался");
+
+        const ws = wsRef.current;
+        const ready = ws?.isReady() === true;
+        add("Соединение с сервером", ready, ready ? "" : `состояние: ${ws?.state ?? "нет клиента"}`);
+
+        const peers = contactsRef.current.filter((c) => !c.isRevoked);
+        add("Участники получены", peers.length > 0, `известно: ${peers.length}`);
+
+        const peer = peers[0];
+        if (!crypto || !peer) return steps;
+
+        const chatId = dmChatId(identity.userId, peer.userId);
+        const encrypted = encryptForChat(crypto, identity, chatId, "самопроверка", new Map([[peer.userId, peer]]));
+        add(
+          "Сообщение шифруется",
+          !("error" in encrypted),
+          "error" in encrypted ? encrypted.error : `для ${peer.displayName}`,
+        );
+
+        // Запись и чтение назад — ровно то, что делает отправка перед уходом
+        // пакета. Строку сразу удаляем, чтобы не оставлять мусор в переписке.
+        const probeId = `selftest-${uuidv4()}`;
+        try {
+          await insertMessage({
+            id: probeId,
+            clientMsgId: probeId,
+            chatId,
+            fromUserId: identity.userId,
+            contentType: "text",
+            plaintext: "самопроверка",
+            replyTo: null,
+            status: "pending",
+            createdAt: Date.now(),
+            deletedAt: null,
+          });
+          const found = (await listMessagesForChat(chatId)).some((m) => m.id === probeId);
+          add("Локальная база пишется", found, found ? "" : "запись не нашлась после вставки");
+        } catch (error) {
+          add("Локальная база пишется", false, error instanceof Error ? error.message : String(error));
+        } finally {
+          await hardDeleteMessage(probeId).catch(() => undefined);
+        }
+
+        if (!ws || !ready) return steps;
+
+        // Круг «отправили пакет — сервер ответил». Если он не проходит, то и
+        // msg.send не дойдёт, сколько бы «на связи» ни показывал экран.
+        const answered = await new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => finish(false), 8000);
+          const finish = (result: boolean): void => {
+            clearTimeout(timer);
+            offPage();
+            offError();
+            resolve(result);
+          };
+          const offPage = ws.events.on("historyPage", () => finish(true));
+          const offError = ws.events.on("errorPacket", () => finish(false));
+          ws.fetchHistory(chatId, Date.now());
+        });
+        add("Сервер отвечает на запросы", answered, answered ? "" : "ответа нет за 8 секунд");
+
+        return steps;
       },
       async createInvite() {
         const ws = wsRef.current;
