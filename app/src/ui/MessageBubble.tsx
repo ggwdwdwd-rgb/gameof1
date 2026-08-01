@@ -9,13 +9,6 @@ import { Icon, type IconName } from "./Icon";
 import { LinkedText } from "./LinkedText";
 import { DURATION, useAppear } from "./motion";
 
-/**
- * Сообщение младше этого времени считаем «только что появившимся» и
- * анимируем. Без такого порога вся переписка проявлялась бы при каждом
- * открытии чата — это выглядит как подвисание, а не как анимация.
- */
-const FRESH_MS = 4000;
-
 /** Строка списка сообщений: само сообщение плюс всё, что вычислено заранее. */
 export interface Decorated {
   message: LocalMessage;
@@ -27,6 +20,8 @@ export interface Decorated {
   /** Автор цитируемого сообщения, уже разрешённый в имя. */
   replyAuthor: string | null;
   replyPreview: string | null;
+  /** Появилось уже при открытом чате — только такое и анимируем. */
+  fresh: boolean;
 }
 
 const STATUS_ICONS: Record<LocalMessage["status"], IconName> = {
@@ -317,10 +312,10 @@ function MessageBubbleBase({ row, mine, theme, onLongPress, onOpenImage }: Bubbl
   const metaColor = mine ? theme.colors.bubbleMineMeta : theme.colors.bubbleTheirsMeta;
   const isImage = message.contentType === "image" && !message.deletedAt;
 
-  // Свежее сообщение выезжает снизу и проявляется, старое рисуется сразу.
-  // Порог считаем один раз при монтировании: пересчёт на каждый рендер
-  // означал бы, что после четырёх секунд анимация «отменяется» на полпути.
-  const fresh = useRef(Date.now() - message.createdAt < FRESH_MS).current;
+  // Свежее сообщение приподнимается и проявляется, остальные рисуются сразу.
+  // Значение запоминаем при монтировании: если сменить его на лету, анимация
+  // оборвалась бы на середине.
+  const fresh = useRef(row.fresh).current;
   const appear = useAppear(fresh, DURATION.normal);
 
   return (
@@ -329,7 +324,10 @@ function MessageBubbleBase({ row, mine, theme, onLongPress, onOpenImage }: Bubbl
         fresh
           ? {
               opacity: appear,
-              transform: [{ translateY: appear.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }],
+              transform: [
+                { translateY: appear.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) },
+                { scale: appear.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+              ],
             }
           : undefined
       }

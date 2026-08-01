@@ -31,7 +31,10 @@ export function ScreenTransition({
     }).start();
   }, [progress]);
 
-  const offset = from === "right" ? 90 : from === "left" ? -90 : 60;
+  // Сдвиг небольшой намеренно. Уходящий экран мы анимировать не можем, и при
+  // большом смещении с краю на мгновение видно пустоту — переход начинает
+  // выглядеть сломанным, а не плавным.
+  const offset = from === "right" ? 34 : from === "left" ? -34 : 44;
   const shift = progress.interpolate({ inputRange: [0, 1], outputRange: [offset, 0] });
 
   return (

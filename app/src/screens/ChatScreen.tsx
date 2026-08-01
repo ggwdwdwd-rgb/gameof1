@@ -48,7 +48,11 @@ function previewOf(message: LocalMessage): string {
  * положение в группе и уже разрешённую цитату. Строки сравниваются по
  * простым значениям, поэтому React.memo реально спасает от перерисовок.
  */
-function decorate(messages: LocalMessage[], nameFor: (userId: string) => string): Decorated[] {
+function decorate(
+  messages: LocalMessage[],
+  nameFor: (userId: string) => string,
+  freshIds: ReadonlySet<string>,
+): Decorated[] {
   const byId = new Map(messages.map((m) => [m.id, m]));
 
   return messages.map((message, index) => {
@@ -74,6 +78,7 @@ function decorate(messages: LocalMessage[], nameFor: (userId: string) => string)
       groupStart: !groupedWithPrev,
       replyAuthor: replied ? nameFor(replied.fromUserId) : null,
       replyPreview: replied ? previewOf(replied) : null,
+      fresh: freshIds.has(message.id),
     };
   });
 }
@@ -130,16 +135,40 @@ export function ChatScreen({
     [contacts, identity.userId],
   );
 
+  /**
+   * Сообщения, появившиеся уже при открытом чате, — только их и анимируем.
+   *
+   * Раньше «свежесть» определялась по времени создания, и сообщение,
+   * пришедшее пару секунд назад, проигрывало появление ещё раз при входе в
+   * чат. Здесь же сравнение с тем, что экран уже показывал: при первой
+   * загрузке новых нет вовсе, поэтому переписка просто рисуется.
+   *
+   * Ref, а не состояние: набор меняется в той же операции, что и messages, и
+   * отдельная перерисовка на него не нужна.
+   */
+  const seenIds = useRef<Set<string>>(new Set());
+  const freshIds = useRef<Set<string>>(new Set());
+  /** Отдельный флаг: в пустом чате по размеру seenIds первую загрузку не отличить. */
+  const loadedOnce = useRef(false);
+
   // Список inverted: элемент 0 рисуется внизу, поэтому порядок обратный.
   // Разметку строки это не меняет — внутри ячейки порядок остаётся обычным.
-  const decorated = useMemo(() => decorate(messages, nameFor).reverse(), [messages, nameFor]);
+  const decorated = useMemo(() => decorate(messages, nameFor, freshIds.current).reverse(), [messages, nameFor]);
 
   useEffect(() => {
     let mounted = true;
+    seenIds.current = new Set();
+    freshIds.current = new Set();
+    loadedOnce.current = false;
 
     async function refresh(): Promise<void> {
       const rows = await listMessagesForChat(chatId);
       if (!mounted) return;
+      freshIds.current = loadedOnce.current
+        ? new Set(rows.filter((r) => !seenIds.current.has(r.id)).map((r) => r.id))
+        : new Set();
+      for (const row of rows) seenIds.current.add(row.id);
+      loadedOnce.current = true;
       setMessages(rows);
       // Прочитанность отмечаем одним запросом, и только для реально
       // непрочитанных: раньше на каждое обновление уходила квитанция по
@@ -395,6 +424,7 @@ export function ChatScreen({
         onPickFile={handlePickFile}
         onShareLocation={handleShareLocation}
         onVoiceRecorded={handleVoiceRecorded}
+        onNotice={showToast}
       />
 
       <Toast state={toast} onHide={hideToast} />

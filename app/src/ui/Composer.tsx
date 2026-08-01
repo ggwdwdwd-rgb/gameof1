@@ -6,14 +6,39 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Animated, Linking, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Alert,
+  Animated,
+  Linking,
+  PanResponder,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type GestureResponderEvent,
+  type PanResponderGestureState,
+} from "react-native";
 import { useTheme } from "../theme/ThemeContext";
+import type { Theme } from "../theme/theme";
 import { Icon, type IconName } from "./Icon";
 import { DURATION, useTransition, usePulse } from "./motion";
 
 /** Через столько после последнего нажатия клавиши сообщаем «перестал печатать». */
 const TYPING_IDLE_MS = 3000;
+
+/** Смахивание влево дальше этого расстояния отменяет запись. */
+const CANCEL_DISTANCE = 90;
+
+/**
+ * Короче этого запись не отправляем.
+ *
+ * Иначе случайное касание кнопки микрофона улетало бы в чат обрывком в
+ * полсекунды. Вместо отправки показываем подсказку, что кнопку надо держать.
+ */
+const MIN_RECORD_MS = 700;
 
 /**
  * Аудиосессию переключаем только на iOS.
@@ -54,6 +79,7 @@ function ComposerBase({
   onPickFile,
   onShareLocation,
   onVoiceRecorded,
+  onNotice,
 }: {
   /** Отступ снизу под панель навигации: под клавиатурой он не нужен. */
   bottomInset: number;
@@ -63,6 +89,8 @@ function ComposerBase({
   onPickFile: () => void | Promise<void>;
   onShareLocation: () => void | Promise<void>;
   onVoiceRecorded: (uri: string, durationMs: number) => void | Promise<void>;
+  /** Короткое сообщение экрану: «отменено», «удерживайте кнопку». */
+  onNotice: (text: string, icon?: IconName) => void;
 }): React.ReactElement {
   const theme = useTheme();
   const [draft, setDraft] = useState("");
@@ -72,8 +100,24 @@ function ComposerBase({
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
 
+  /** Идёт запись — влияет только на вид, решения принимаются по рефам. */
+  const [recording, setRecording] = useState(false);
+  /** Палец ушёл влево дальше порога: отпускание отменит запись. */
+  const [cancelArmed, setCancelArmed] = useState(false);
+  /**
+   * Рефы, а не состояние: обработчики жеста создаются один раз и до
+   * актуального состояния React не дотягиваются — они видели бы значения
+   * момента создания.
+   */
+  const holdingRef = useRef(false);
+  const cancelRef = useRef(false);
+  const startingRef = useRef(false);
+  const startedAtRef = useRef(0);
+  /** Сдвиг панели записи вслед за пальцем. */
+  const slide = useRef(new Animated.Value(0)).current;
+
   // Пульсация кнопки записи: 1 → 1.12 и обратно, пока идёт запись.
-  const pulse = usePulse(recorderState.isRecording);
+  const pulse = usePulse(recording);
   const recordScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
   /** Шторка вложений: выезжает и уезжает, а не мигает. */
   const attachProgress = useTransition(attachOpen, DURATION.fast);
@@ -91,8 +135,14 @@ function ComposerBase({
   useEffect(
     () => () => {
       if (typingStopTimer.current) clearTimeout(typingStopTimer.current);
+      // Уходя с экрана с зажатой кнопкой, запись надо оборвать: иначе рекордер
+      // остаётся включённым и держит микрофон уже после закрытия чата.
+      holdingRef.current = false;
+      if (recorder.isRecording) {
+        void recorder.stop().then(leaveRecordingMode);
+      }
     },
-    [],
+    [recorder],
   );
 
   const handleDraftChange = useCallback(
@@ -121,66 +171,151 @@ function ComposerBase({
     void action();
   }, []);
 
-  /**
-   * Запись включается и выключается нажатием, а не удержанием.
-   *
-   * С удержанием она не работала вовсе: системный диалог разрешения забирал
-   * фокус, палец «отпускался», onPressOut срабатывал сразу — и остановка
-   * приходила раньше старта. Плюс нажатие честнее: держать палец минуту,
-   * записывая длинное сообщение, неудобно.
-   */
-  const handleToggleRecording = useCallback(async () => {
-    // try обязателен вокруг всего: раньше он покрывал только запуск записи, а
-    // запрос разрешения и остановка были снаружи. Их исключение уходило в
-    // unhandled rejection — по нажатию кнопки не происходило вообще ничего, и
-    // выглядело это как «не запрашивает доступ и не записывает».
-    try {
-      if (recorderState.isRecording) {
-        const durationMs = recorderState.durationMillis;
-        await recorder.stop();
-        await leaveRecordingMode();
-        const uri = recorder.uri;
-        if (!uri) {
-          Alert.alert("Запись не получилась", "Файл не создан — попробуйте записать ещё раз.");
-          return;
-        }
-        void onVoiceRecorded(uri, durationMs);
-        return;
-      }
+  /** Разрешение спрашиваем один раз за сеанс, а не на каждое удержание. */
+  const ensureMicPermission = useCallback(async (): Promise<boolean> => {
+    const current = await getRecordingPermissionsAsync();
+    if (current.granted) return true;
+    const permission = await requestRecordingPermissionsAsync();
+    if (permission.granted) return true;
 
-      // Сначала спрашиваем текущее состояние: если разрешение уже отозвано
-      // навсегда, системный диалог не появится, и об этом нужно сказать прямо,
-      // а не молчать после нажатия.
-      const current = await getRecordingPermissionsAsync();
-      const permission = current.granted ? current : await requestRecordingPermissionsAsync();
-      if (!permission.granted) {
-        // Android показывает системный диалог не больше двух раз. Дальше запрос
-        // отклоняется молча, и «разрешите в настройках» превращается в тупик —
-        // поэтому уводим прямо в настройки приложения.
-        if (permission.canAskAgain) {
-          Alert.alert("Нет доступа к микрофону", "Без доступа записать голосовое нельзя.");
-        } else {
-          Alert.alert(
-            "Нет доступа к микрофону",
-            "Android больше не будет спрашивать разрешение — его нужно включить вручную: Настройки → Приложения → Cry → Разрешения → Микрофон.",
-            [
-              { text: "Отмена", style: "cancel" },
-              { text: "Открыть настройки", onPress: () => void Linking.openSettings() },
-            ],
-          );
-        }
-        return;
-      }
+    // Android показывает системный диалог не больше двух раз. Дальше запрос
+    // отклоняется молча, и «разрешите в настройках» превращается в тупик —
+    // поэтому уводим прямо в настройки приложения.
+    if (permission.canAskAgain) {
+      Alert.alert("Нет доступа к микрофону", "Без доступа записать голосовое нельзя.");
+    } else {
+      Alert.alert(
+        "Нет доступа к микрофону",
+        "Android больше не будет спрашивать разрешение — его нужно включить вручную: Настройки → Приложения → Cry → Разрешения → Микрофон.",
+        [
+          { text: "Отмена", style: "cancel" },
+          { text: "Открыть настройки", onPress: () => void Linking.openSettings() },
+        ],
+      );
+    }
+    return false;
+  }, []);
+
+  /**
+   * Запуск записи по удержанию.
+   *
+   * Между нажатием и реальным стартом проходит заметное время: запрос
+   * разрешения, подготовка рекордера. Палец за это время могут отпустить,
+   * поэтому после каждого await сверяемся с holdingRef — иначе запись
+   * начиналась бы уже после того, как её отменили, и оставалась бы висеть.
+   */
+  const beginRecording = useCallback(async () => {
+    startingRef.current = true;
+    let denied = false;
+    try {
+      denied = !(await ensureMicPermission());
+      if (denied || !holdingRef.current) return;
 
       await enterRecordingMode();
       await recorder.prepareToRecordAsync();
+      if (!holdingRef.current) return;
+
       recorder.record();
+      startedAtRef.current = Date.now();
+      setRecording(true);
     } catch (error) {
       // Текст ошибки показываем как есть: иначе непонятно, дело в разрешении,
       // в занятом микрофоне или в чём-то ещё.
       Alert.alert("Голосовое не записалось", error instanceof Error ? error.message : String(error));
+    } finally {
+      startingRef.current = false;
+      // Пока шла подготовка, палец могли отпустить. Обработчик отпускания об
+      // этой записи ещё не знал (startingRef был поднят), поэтому доводим дело
+      // до конца здесь.
+      if (!holdingRef.current) {
+        if (recorder.isRecording) {
+          await recorder.stop();
+          await leaveRecordingMode();
+          setRecording(false);
+        }
+        // Отказ в разрешении уже объяснён диалогом — второй подсказки не надо.
+        if (!denied) onNotice("Удерживайте кнопку, чтобы записать", "mic");
+      }
     }
-  }, [onVoiceRecorded, recorder, recorderState.durationMillis, recorderState.isRecording]);
+  }, [ensureMicPermission, onNotice, recorder]);
+
+  /** Отпустили палец: отправляем или выбрасываем запись. */
+  const finishRecording = useCallback(
+    async (cancelled: boolean) => {
+      // Старт ещё не завершился — beginRecording сам увидит, что holdingRef
+      // сброшен, и остановит запись. Второй раз останавливать нельзя.
+      if (startingRef.current) return;
+      if (!recorder.isRecording) return;
+
+      const durationMs = Date.now() - startedAtRef.current;
+      try {
+        await recorder.stop();
+        await leaveRecordingMode();
+      } finally {
+        setRecording(false);
+      }
+
+      if (cancelled) {
+        onNotice("Запись отменена", "trash");
+        return;
+      }
+      if (durationMs < MIN_RECORD_MS) {
+        onNotice("Удерживайте кнопку, чтобы записать", "mic");
+        return;
+      }
+      const uri = recorder.uri;
+      if (!uri) {
+        Alert.alert("Запись не получилась", "Файл не создан — попробуйте записать ещё раз.");
+        return;
+      }
+      void onVoiceRecorded(uri, durationMs);
+    },
+    [onNotice, onVoiceRecorded, recorder],
+  );
+
+  /**
+   * Жест удержания. PanResponder, а не onPressIn/onPressOut у Pressable:
+   * нужен ещё и сдвиг пальца, чтобы отменить запись смахиванием влево, как в
+   * привычных мессенджерах.
+   */
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        // Жест не отдаём списку сообщений: иначе смахивание влево уехало бы в
+        // прокрутку, а запись осталась бы висеть.
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: () => {
+          holdingRef.current = true;
+          cancelRef.current = false;
+          setCancelArmed(false);
+          slide.setValue(0);
+          void beginRecording();
+        },
+        onPanResponderMove: (_event: GestureResponderEvent, gesture: PanResponderGestureState) => {
+          const shift = Math.min(0, gesture.dx);
+          slide.setValue(shift);
+          const armed = shift <= -CANCEL_DISTANCE;
+          if (armed !== cancelRef.current) {
+            cancelRef.current = armed;
+            setCancelArmed(armed);
+          }
+        },
+        onPanResponderRelease: () => {
+          holdingRef.current = false;
+          Animated.timing(slide, { toValue: 0, duration: DURATION.fast, useNativeDriver: true }).start();
+          void finishRecording(cancelRef.current);
+        },
+        // Жест перехватила система (звонок, шторка) — это отмена, а не отправка.
+        onPanResponderTerminate: () => {
+          holdingRef.current = false;
+          slide.setValue(0);
+          void finishRecording(true);
+        },
+      }),
+    [beginRecording, finishRecording, slide],
+  );
 
   const hasDraft = draft.trim().length > 0;
   const attachActions: { icon: IconName; label: string; onPress: () => void | Promise<void> }[] = [
@@ -236,34 +371,40 @@ function ComposerBase({
           },
         ]}
       >
-        <View style={[styles.inputPill, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}>
-          <Pressable onPress={() => setAttachOpen((open) => !open)} hitSlop={8} style={styles.attachButton}>
-            {/* Плюс поворачивается в крестик, а не подменяется другой иконкой:
-                так видно, что это одна и та же кнопка. */}
-            <Animated.View
-              style={{
-                transform: [
-                  { rotate: attachProgress.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "45deg"] }) },
-                ],
-              }}
-            >
-              <Icon name="plus" size={22} color={attachOpen ? theme.colors.accent : theme.colors.textMuted} />
-            </Animated.View>
-          </Pressable>
-          <TextInput
-            style={[styles.input, { color: theme.colors.textPrimary }]}
-            value={draft}
-            onChangeText={handleDraftChange}
-            placeholder={
-              recorderState.isRecording
-                ? `Записываю… ${Math.floor(recorderState.durationMillis / 1000)} с — нажмите ✓`
-                : "Сообщение"
-            }
-            placeholderTextColor={theme.colors.textMuted}
-            multiline
-            editable={!recorderState.isRecording}
+        {recording ? (
+          <RecordingBar
+            durationMs={recorderState.durationMillis}
+            cancelArmed={cancelArmed}
+            slide={slide}
+            theme={theme}
           />
-        </View>
+        ) : (
+          <View
+            style={[styles.inputPill, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}
+          >
+            <Pressable onPress={() => setAttachOpen((open) => !open)} hitSlop={8} style={styles.attachButton}>
+              {/* Плюс поворачивается в крестик, а не подменяется другой иконкой:
+                  так видно, что это одна и та же кнопка. */}
+              <Animated.View
+                style={{
+                  transform: [
+                    { rotate: attachProgress.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "45deg"] }) },
+                  ],
+                }}
+              >
+                <Icon name="plus" size={22} color={attachOpen ? theme.colors.accent : theme.colors.textMuted} />
+              </Animated.View>
+            </Pressable>
+            <TextInput
+              style={[styles.input, { color: theme.colors.textPrimary }]}
+              value={draft}
+              onChangeText={handleDraftChange}
+              placeholder="Сообщение"
+              placeholderTextColor={theme.colors.textMuted}
+              multiline
+            />
+          </View>
+        )}
 
         {hasDraft ? (
           <Pressable
@@ -276,26 +417,79 @@ function ComposerBase({
             <Icon name="send" size={21} color={theme.colors.onAccent} />
           </Pressable>
         ) : (
-          <Pressable onPress={() => void handleToggleRecording()}>
-            {({ pressed }) => (
-              <Animated.View
-                style={[
-                  styles.sendButton,
-                  {
-                    backgroundColor: recorderState.isRecording ? theme.colors.danger : theme.colors.accent,
-                    // Во время записи кнопка «дышит» — видно, что запись идёт,
-                    // даже не читая подсказку в поле ввода.
-                    transform: [{ scale: Animated.multiply(recordScale, pressed ? 0.92 : 1) }],
-                  },
-                ]}
-              >
-                <Icon name={recorderState.isRecording ? "check" : "mic"} size={21} color={theme.colors.onAccent} />
-              </Animated.View>
-            )}
-          </Pressable>
+          // Кнопка микрофона: удержание записывает, смахивание влево отменяет.
+          <Animated.View
+            {...panResponder.panHandlers}
+            style={[
+              styles.sendButton,
+              {
+                backgroundColor: cancelArmed ? theme.colors.danger : theme.colors.accent,
+                transform: [
+                  { scale: recording ? recordScale : 1 },
+                  // Кнопка едет за пальцем, но вдвое медленнее — так видно, что
+                  // жест поймали, и палец при этом не убегает от кнопки.
+                  { translateX: Animated.multiply(slide, 0.5) },
+                ],
+              },
+            ]}
+          >
+            <Icon name={cancelArmed ? "trash" : "mic"} size={21} color={theme.colors.onAccent} />
+          </Animated.View>
         )}
       </View>
     </>
+  );
+}
+
+/** Секунды в 0:07. */
+function formatDuration(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Панель на месте поля ввода, пока идёт запись.
+ *
+ * Заменяет собой строку ввода, а не подписывается снизу: во время записи
+ * писать всё равно нельзя, а свободное место нужно под таймер и подсказку про
+ * отмену.
+ */
+function RecordingBar({
+  durationMs,
+  cancelArmed,
+  slide,
+  theme,
+}: {
+  durationMs: number;
+  cancelArmed: boolean;
+  slide: Animated.Value;
+  theme: Theme;
+}): React.ReactElement {
+  // Красная точка мигает — тот же язык, что у любого индикатора записи.
+  const blink = usePulse(true);
+
+  return (
+    <Animated.View
+      style={[
+        styles.inputPill,
+        styles.recordingPill,
+        {
+          backgroundColor: theme.colors.background,
+          borderColor: cancelArmed ? theme.colors.danger : theme.colors.border,
+          // Вся панель тоже смещается за пальцем — жест ощущается цельным.
+          transform: [{ translateX: Animated.multiply(slide, 0.35) }],
+        },
+      ]}
+    >
+      <Animated.View style={[styles.recordingDot, { backgroundColor: theme.colors.danger, opacity: blink }]} />
+      <Text style={[styles.recordingTime, { color: theme.colors.textPrimary }]}>{formatDuration(durationMs)}</Text>
+      <Text
+        style={[styles.recordingHint, { color: cancelArmed ? theme.colors.danger : theme.colors.textMuted }]}
+        numberOfLines={1}
+      >
+        {cancelArmed ? "Отпустите — запись не отправится" : "‹ смахните влево, чтобы отменить"}
+      </Text>
+    </Animated.View>
   );
 }
 
@@ -334,6 +528,10 @@ const styles = StyleSheet.create({
     paddingRight: 12,
     minHeight: 44,
   },
+  recordingPill: { alignItems: "center", gap: 9, paddingLeft: 14, paddingVertical: 11 },
+  recordingDot: { width: 9, height: 9, borderRadius: 5 },
+  recordingTime: { fontSize: 15.5, fontWeight: "600", fontVariant: ["tabular-nums"], minWidth: 42 },
+  recordingHint: { flex: 1, fontSize: 13, textAlign: "right" },
   attachButton: { width: 38, height: 42, alignItems: "center", justifyContent: "center" },
   input: { flex: 1, paddingTop: 11, paddingBottom: 11, maxHeight: 120, fontSize: 16, lineHeight: 21 },
   sendButton: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
