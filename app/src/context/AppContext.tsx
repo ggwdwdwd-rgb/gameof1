@@ -192,29 +192,12 @@ export function AppProvider({
       cryptoRef.current = crypto;
       setMyFingerprint(crypto.computeFingerprint(identity.identityPublicKey));
 
-      /**
-       * Уведомления включаем сами при первом запуске.
-       *
-       * Раньше выключатель по умолчанию стоял в «выкл», и уведомления не
-       * приходили просто потому, что о нём никто не знал: искать его в
-       * настройках никому в голову не приходит. Теперь на первом запуске
-       * спрашиваем системное разрешение (на Android 13+ оно обязательно) и,
-       * если дали, включаем. Дальше решение пользователя из настроек уважаем и
-       * больше не переспрашиваем.
-       */
+      // Только чтение сохранённого выключателя — ничего интерактивного. Всё
+      // остальное про уведомления вынесено в отдельную задачу после
+      // ws.connect() (см. комментарий там же).
       const stored = await getSetting(NOTIFICATIONS_SETTING);
-      let notificationsOn = stored === "1";
-      if (stored === null) {
-        notificationsOn = (await requestPermission()) === "granted";
-        await setSetting(NOTIFICATIONS_SETTING, notificationsOn ? "1" : "0");
-      } else if (notificationsOn && (await getPermissionState()) !== "granted") {
-        // Разрешение могли отозвать в настройках телефона — тогда выключатель
-        // обманывал бы, показывая «включено».
-        notificationsOn = false;
-        await setSetting(NOTIFICATIONS_SETTING, "0");
-      }
-      notificationsRef.current = notificationsOn;
-      if (!cancelled) setNotificationsEnabled(notificationsOn);
+      notificationsRef.current = stored === "1";
+      if (!cancelled) setNotificationsEnabled(stored === "1");
 
       const storedContacts = await listContacts();
       if (cancelled) return;
@@ -416,6 +399,41 @@ export function AppProvider({
       });
 
       ws.connect();
+
+      /**
+       * Уведомления настраиваем ПОСЛЕ connect и отдельной задачей.
+       *
+       * Здесь показывается системный диалог разрешения, то есть ожидание
+       * человека. В общей цепочке инициализации это означало бы, что
+       * ws.connect() ждёт, пока пользователь нажмёт кнопку в диалоге, а любая
+       * ошибка отсюда уводила бы весь запуск в catch — и приложение оставалось
+       * бы вообще без соединения, «сообщения не идут». Один раз я уже наступил
+       * на это с проверкой сборки libsodium; ничего интерактивного и ничего
+       * необязательного до connect быть не должно.
+       *
+       * Спрашиваем только на первом запуске (значения в настройках ещё нет).
+       * Дальше решение пользователя уважаем и не переспрашиваем.
+       */
+      void (async () => {
+        try {
+          if (stored === null) {
+            const granted = (await requestPermission()) === "granted";
+            await setSetting(NOTIFICATIONS_SETTING, granted ? "1" : "0");
+            notificationsRef.current = granted;
+            if (!cancelled) setNotificationsEnabled(granted);
+            return;
+          }
+          // Разрешение могли отозвать в настройках телефона — тогда выключатель
+          // обманывал бы, показывая «включено».
+          if (stored === "1" && (await getPermissionState()) !== "granted") {
+            await setSetting(NOTIFICATIONS_SETTING, "0");
+            notificationsRef.current = false;
+            if (!cancelled) setNotificationsEnabled(false);
+          }
+        } catch (error) {
+          console.warn("не удалось настроить уведомления", error);
+        }
+      })();
     })().catch((error: unknown) => {
       if (cancelled) return;
       const detail = error instanceof Error ? error.message : String(error);
