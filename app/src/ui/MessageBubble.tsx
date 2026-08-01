@@ -1,12 +1,20 @@
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import * as Sharing from "expo-sharing";
 import React, { useEffect, useRef, useState } from "react";
-import { Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Easing, Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { formatFileSize, parseLocalMediaMeta } from "../chat/media";
 import type { LocalMessage } from "../db/messages";
 import type { Theme } from "../theme/theme";
 import { Icon, type IconName } from "./Icon";
 import { LinkedText } from "./LinkedText";
+import { DURATION, useAppear } from "./motion";
+
+/**
+ * Сообщение младше этого времени считаем «только что появившимся» и
+ * анимируем. Без такого порога вся переписка проявлялась бы при каждом
+ * открытии чата — это выглядит как подвисание, а не как анимация.
+ */
+const FRESH_MS = 4000;
 
 /** Строка списка сообщений: само сообщение плюс всё, что вычислено заранее. */
 export interface Decorated {
@@ -102,17 +110,34 @@ function VoicePlayer({
 }): React.ReactElement {
   const player = useAudioPlayer(localUri);
   const status = useAudioPlayerStatus(player);
-  const totalSec = Math.round(status.duration || (durationMs ?? 0) / 1000 || 0);
+  // Длину берём свою, если плеер её ещё не определил: у m4a она становится
+  // известна только после разбора контейнера, и до этого показывался «0:00».
+  const totalSec = Math.round(status.duration > 0 ? status.duration : (durationMs ?? 0) / 1000);
   const currentSec = Math.round(status.currentTime || 0);
   const progress = totalSec > 0 ? Math.min(1, currentSec / totalSec) : 0;
 
-  // Первое нажатие уже было — начинаем играть, как только плеер готов.
-  const autoStarted = useRef(false);
+  /**
+   * Играть начинаем сразу при монтировании, а не по событию «загрузился».
+   *
+   * Раньше play() вызывался в эффекте по status.isLoaded — и если это событие
+   * не приходило (обновления статуса плеер присылает не всегда, особенно пока
+   * не начал играть), первое нажатие не делало вообще ничего. Плееру можно
+   * сказать play() до загрузки: он запомнит и начнёт, как только будет готов.
+   * Второй вызов после isLoaded оставлен как страховка — повторный play() на
+   * уже играющем плеере безвреден.
+   */
+  const started = useRef(false);
   useEffect(() => {
-    if (autoStarted.current || !status.isLoaded) return;
-    autoStarted.current = true;
+    if (started.current && !status.isLoaded) return;
+    started.current = true;
     player.play();
   }, [player, status.isLoaded]);
+
+  // Ошибку показываем текстом: молчащая кнопка не даёт понять, что файл не
+  // открылся.
+  if (status.error) {
+    return <Text style={[styles.voiceError, { color: tint }]}>Не удалось открыть запись</Text>;
+  }
 
   return (
     <VoiceRow
@@ -121,7 +146,16 @@ function VoicePlayer({
       playing={status.playing}
       progress={progress}
       label={`${currentSec > 0 ? `${formatSeconds(currentSec)} / ` : ""}${formatSeconds(totalSec)}`}
-      onPress={() => (status.playing ? player.pause() : player.play())}
+      onPress={() => {
+        if (status.playing) {
+          player.pause();
+          return;
+        }
+        // Доиграв до конца, плеер остаётся в самом конце — без возврата в
+        // начало повторное нажатие ничего бы не воспроизвело.
+        if (totalSec > 0 && currentSec >= totalSec) void player.seekTo(0);
+        player.play();
+      }}
     />
   );
 }
@@ -141,14 +175,31 @@ function VoiceRow({
   label: string;
   onPress: () => void;
 }): React.ReactElement {
+  // Статус приходит раз в полсекунды, и без сглаживания полоска дёргалась
+  // рывками. Здесь native driver не годится: анимируется ширина, а не
+  // трансформация — но это полоска высотой 3px, стоит она недорого.
+  const fill = useRef(new Animated.Value(progress)).current;
+  useEffect(() => {
+    Animated.timing(fill, { toValue: progress, duration: 480, easing: Easing.linear, useNativeDriver: false }).start();
+  }, [progress, fill]);
+
+  const width = fill.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
+
   return (
     <View style={styles.voiceRow}>
-      <Pressable onPress={onPress} hitSlop={8} style={[styles.voiceButton, { borderColor: tint }]}>
+      <Pressable
+        onPress={onPress}
+        hitSlop={8}
+        style={({ pressed }) => [
+          styles.voiceButton,
+          { borderColor: tint, transform: [{ scale: pressed ? 0.9 : 1 }] },
+        ]}
+      >
         <Icon name={playing ? "pause" : "play"} size={15} color={tint} />
       </Pressable>
       <View style={styles.voiceMeter}>
         <View style={[styles.voiceTrack, { backgroundColor: trackColor }]}>
-          <View style={[styles.voiceFill, { backgroundColor: tint, width: `${progress * 100}%` }]} />
+          <Animated.View style={[styles.voiceFill, { backgroundColor: tint, width }]} />
         </View>
         <Text style={[styles.voiceTime, { color: tint }]}>{label}</Text>
       </View>
@@ -266,8 +317,23 @@ function MessageBubbleBase({ row, mine, theme, onLongPress, onOpenImage }: Bubbl
   const metaColor = mine ? theme.colors.bubbleMineMeta : theme.colors.bubbleTheirsMeta;
   const isImage = message.contentType === "image" && !message.deletedAt;
 
+  // Свежее сообщение выезжает снизу и проявляется, старое рисуется сразу.
+  // Порог считаем один раз при монтировании: пересчёт на каждый рендер
+  // означал бы, что после четырёх секунд анимация «отменяется» на полпути.
+  const fresh = useRef(Date.now() - message.createdAt < FRESH_MS).current;
+  const appear = useAppear(fresh, DURATION.normal);
+
   return (
-    <View>
+    <Animated.View
+      style={
+        fresh
+          ? {
+              opacity: appear,
+              transform: [{ translateY: appear.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }],
+            }
+          : undefined
+      }
+    >
       {showDay && (
         <View style={styles.dayWrap}>
           <View style={[styles.dayChip, { backgroundColor: theme.colors.dateChip }]}>
@@ -277,7 +343,7 @@ function MessageBubbleBase({ row, mine, theme, onLongPress, onOpenImage }: Bubbl
       )}
 
       <Pressable
-        style={[
+        style={({ pressed }) => [
           styles.bubble,
           mine ? styles.bubbleMine : styles.bubbleTheirs,
           // Хвостик только у последнего сообщения в группе — так серия
@@ -289,6 +355,9 @@ function MessageBubbleBase({ row, mine, theme, onLongPress, onOpenImage }: Bubbl
             borderColor: theme.colors.border,
             marginTop: groupStart ? 8 : 2,
             shadowColor: theme.colors.shadow,
+            // Отклик на удержание: понятно, что жест поймали, ещё до открытия
+            // меню.
+            transform: [{ scale: pressed ? 0.985 : 1 }],
           },
         ]}
         onLongPress={() => onLongPress(message)}
@@ -335,7 +404,7 @@ function MessageBubbleBase({ row, mine, theme, onLongPress, onOpenImage }: Bubbl
           )}
         </View>
       </Pressable>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -426,6 +495,7 @@ const styles = StyleSheet.create({
   voiceTrack: { height: 3, borderRadius: 2, overflow: "hidden" },
   voiceFill: { height: 3, borderRadius: 2 },
   voiceTime: { fontSize: 12 },
+  voiceError: { fontSize: 14, fontStyle: "italic", minWidth: 168 },
   replyQuote: {
     borderLeftWidth: 3,
     paddingLeft: 8,

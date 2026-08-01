@@ -11,6 +11,7 @@ import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { loadIdentity, type DeviceIdentity } from "./src/storage/identity";
 import { ThemeProvider, useTheme } from "./src/theme/ThemeContext";
 import { LogoMark } from "./src/ui/LogoMark";
+import { ScreenTransition } from "./src/ui/ScreenTransition";
 
 type Screen =
   | { name: "chatList" }
@@ -63,23 +64,38 @@ function Root(): React.ReactElement {
 
   return (
     <AppProvider identity={identity}>
+      {/* key по имени экрана: он заставляет ScreenTransition пересоздаться и
+          проиграть появление на каждом переходе. Список чатов возвращается
+          слева — как будто мы вышли из экрана назад, а не открыли новый. */}
       {screen.name === "chatList" && (
-        <ChatListScreen
-          onOpenChat={(chatId, title, peerUserId) => setScreen({ name: "chat", chatId, title, peerUserId })}
-          onOpenSettings={() => setScreen({ name: "settings" })}
-          onAddPerson={() => setScreen({ name: "addPerson" })}
-        />
+        <ScreenTransition key="chatList" from="left">
+          <ChatListScreen
+            onOpenChat={(chatId, title, peerUserId) => setScreen({ name: "chat", chatId, title, peerUserId })}
+            onOpenSettings={() => setScreen({ name: "settings" })}
+            onAddPerson={() => setScreen({ name: "addPerson" })}
+          />
+        </ScreenTransition>
       )}
       {screen.name === "chat" && (
-        <ChatScreen
-          chatId={screen.chatId}
-          title={screen.title}
-          peerUserId={screen.peerUserId}
-          onBack={() => setScreen({ name: "chatList" })}
-        />
+        <ScreenTransition key={`chat:${screen.chatId}`}>
+          <ChatScreen
+            chatId={screen.chatId}
+            title={screen.title}
+            peerUserId={screen.peerUserId}
+            onBack={() => setScreen({ name: "chatList" })}
+          />
+        </ScreenTransition>
       )}
-      {screen.name === "settings" && <SettingsScreen onBack={() => setScreen({ name: "chatList" })} />}
-      {screen.name === "addPerson" && <AddPersonScreen onBack={() => setScreen({ name: "chatList" })} />}
+      {screen.name === "settings" && (
+        <ScreenTransition key="settings">
+          <SettingsScreen onBack={() => setScreen({ name: "chatList" })} />
+        </ScreenTransition>
+      )}
+      {screen.name === "addPerson" && (
+        <ScreenTransition key="addPerson" from="bottom">
+          <AddPersonScreen onBack={() => setScreen({ name: "chatList" })} />
+        </ScreenTransition>
+      )}
       <StatusBar style={theme.colors.statusBar} />
     </AppProvider>
   );

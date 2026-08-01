@@ -8,6 +8,7 @@ import { useApp, type SendResult } from "../context/AppContext";
 import { contactTitle } from "../db/contacts";
 import { listMessagesForChat, type LocalMessage } from "../db/messages";
 import { useTheme } from "../theme/ThemeContext";
+import { ActionSheet, type SheetAction } from "../ui/ActionSheet";
 import { Avatar } from "../ui/Avatar";
 import { Composer } from "../ui/Composer";
 import { Header } from "../ui/Header";
@@ -15,6 +16,7 @@ import { Icon } from "../ui/Icon";
 import { ImageViewer } from "../ui/ImageViewer";
 import { MessageBubble, type Decorated } from "../ui/MessageBubble";
 import { RenameModal } from "../ui/RenameModal";
+import { Toast, useToast } from "../ui/Toast";
 import { describePresence } from "../ui/presence";
 import { useKeyboard } from "../ui/useKeyboard";
 import { Wallpaper } from "../ui/Wallpaper";
@@ -109,6 +111,9 @@ export function ChatScreen({
   const [peerTyping, setPeerTyping] = useState(false);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
+  /** Сообщение, для которого открыт лист действий. */
+  const [menuFor, setMenuFor] = useState<LocalMessage | null>(null);
+  const { toast, showToast, hideToast } = useToast();
   const listRef = useRef<FlatList<Decorated>>(null);
 
   const contact = contacts.find((c) => c.userId === peerUserId);
@@ -191,30 +196,41 @@ export function ChatScreen({
     [chatId, reportIfFailed, sendText, takeReplyTo],
   );
 
-  const handleLongPress = useCallback(
-    (item: LocalMessage): void => {
-      if (item.deletedAt) return;
-      const buttons: { text: string; onPress?: () => void; style?: "destructive" | "cancel" }[] = [
-        { text: "Ответить", onPress: () => setReplyingTo(item) },
-      ];
-      // Копировать имеет смысл только текст: у вложений в plaintext лежат
-      // метаданные файла, а не то, что видит пользователь.
-      if (item.contentType === "text" && item.plaintext !== null) {
-        const text = item.plaintext;
-        buttons.push({ text: "Копировать", onPress: () => void Clipboard.setStringAsync(text) });
-      }
-      if (item.fromUserId === identity.userId) {
-        buttons.push({
-          text: "Удалить у всех",
-          style: "destructive",
-          onPress: () => void deleteMessage(item.id, chatId),
-        });
-      }
-      buttons.push({ text: "Отмена", style: "cancel" });
-      Alert.alert("Сообщение", undefined, buttons);
-    },
-    [chatId, deleteMessage, identity.userId],
-  );
+  // Меню сообщения — свой лист действий вместо Alert.alert: системный диалог
+  // выглядел чужим (серая карточка с бирюзовыми надписями) и не показывал даже,
+  // о каком сообщении речь.
+  const handleLongPress = useCallback((item: LocalMessage): void => {
+    if (item.deletedAt) return;
+    setMenuFor(item);
+  }, []);
+
+  const menuActions = useMemo((): SheetAction[] => {
+    const item = menuFor;
+    if (!item) return [];
+    const actions: SheetAction[] = [{ label: "Ответить", icon: "reply", onPress: () => setReplyingTo(item) }];
+    // Копировать имеет смысл только текст: у вложений в plaintext лежат
+    // метаданные файла, а не то, что видит пользователь.
+    if (item.contentType === "text" && item.plaintext !== null) {
+      const text = item.plaintext;
+      actions.push({
+        label: "Копировать",
+        icon: "copy",
+        onPress: () => {
+          void Clipboard.setStringAsync(text);
+          showToast("Скопировано", "copy");
+        },
+      });
+    }
+    if (item.fromUserId === identity.userId) {
+      actions.push({
+        label: "Удалить у всех",
+        icon: "trash",
+        destructive: true,
+        onPress: () => void deleteMessage(item.id, chatId),
+      });
+    }
+    return actions;
+  }, [menuFor, chatId, deleteMessage, identity.userId, showToast]);
 
   const handlePickImage = useCallback(async (): Promise<void> => {
     const prepared = await pickAndCompressImage();
@@ -379,6 +395,15 @@ export function ChatScreen({
         onPickFile={handlePickFile}
         onShareLocation={handleShareLocation}
         onVoiceRecorded={handleVoiceRecorded}
+      />
+
+      <Toast state={toast} onHide={hideToast} />
+
+      <ActionSheet
+        visible={menuFor !== null}
+        title={menuFor ? previewOf(menuFor).slice(0, 90) : undefined}
+        actions={menuActions}
+        onClose={() => setMenuFor(null)}
       />
 
       <ImageViewer uri={viewerUri} onClose={() => setViewerUri(null)} />

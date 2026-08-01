@@ -7,12 +7,35 @@ import {
   useAudioRecorderState,
 } from "expo-audio";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Animated, Linking, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useTheme } from "../theme/ThemeContext";
 import { Icon, type IconName } from "./Icon";
+import { DURATION, useTransition, usePulse } from "./motion";
 
 /** Через столько после последнего нажатия клавиши сообщаем «перестал печатать». */
 const TYPING_IDLE_MS = 3000;
+
+/**
+ * Аудиосессию переключаем только на iOS.
+ *
+ * allowsRecording в expo-audio помечен @platform ios — на Android этого поля в
+ * нативной записи вообще нет. Зато сам вызов setAudioModeAsync на Android
+ * выполняет audioManager.setSpeakerphoneOn(...), а это устаревший способ
+ * управления маршрутизацией, который на части устройств уводит звук из
+ * основного динамика. То есть на Android вызов не даёт ничего полезного и при
+ * этом способен сломать воспроизведение записанных голосовых — ровно то, что и
+ * происходило: записать получалось, а послушать нет.
+ */
+async function enterRecordingMode(): Promise<void> {
+  if (Platform.OS !== "ios") return;
+  await setAudioModeAsync({ allowsRecording: true });
+}
+
+/** Возврат к обычному воспроизведению: иначе звук идёт в динамик у уха. */
+async function leaveRecordingMode(): Promise<void> {
+  if (Platform.OS !== "ios") return;
+  await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+}
 
 /**
  * Строка ввода со шторкой вложений и записью голоса.
@@ -48,6 +71,22 @@ function ComposerBase({
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
+
+  // Пульсация кнопки записи: 1 → 1.12 и обратно, пока идёт запись.
+  const pulse = usePulse(recorderState.isRecording);
+  const recordScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
+  /** Шторка вложений: выезжает и уезжает, а не мигает. */
+  const attachProgress = useTransition(attachOpen, DURATION.fast);
+  // Со сцены снимаем не сразу, иначе анимации закрытия не видно вовсе.
+  const [attachMounted, setAttachMounted] = useState(false);
+  useEffect(() => {
+    if (attachOpen) {
+      setAttachMounted(true);
+      return;
+    }
+    const timer = setTimeout(() => setAttachMounted(false), DURATION.fast);
+    return () => clearTimeout(timer);
+  }, [attachOpen]);
 
   useEffect(
     () => () => {
@@ -99,6 +138,7 @@ function ComposerBase({
       if (recorderState.isRecording) {
         const durationMs = recorderState.durationMillis;
         await recorder.stop();
+        await leaveRecordingMode();
         const uri = recorder.uri;
         if (!uri) {
           Alert.alert("Запись не получилась", "Файл не создан — попробуйте записать ещё раз.");
@@ -132,7 +172,7 @@ function ComposerBase({
         return;
       }
 
-      await setAudioModeAsync({ allowsRecording: true });
+      await enterRecordingMode();
       await recorder.prepareToRecordAsync();
       recorder.record();
     } catch (error) {
@@ -151,14 +191,27 @@ function ComposerBase({
 
   return (
     <>
-      {attachOpen && (
-        <View
-          style={[styles.attachSheet, { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.divider }]}
+      {attachMounted && (
+        <Animated.View
+          style={[
+            styles.attachSheet,
+            {
+              backgroundColor: theme.colors.surface,
+              borderTopColor: theme.colors.divider,
+              opacity: attachProgress,
+              transform: [
+                { translateY: attachProgress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) },
+              ],
+            },
+          ]}
         >
           {attachActions.map((action) => (
             <Pressable
               key={action.label}
-              style={({ pressed }) => [styles.attachAction, { opacity: pressed ? 0.6 : 1 }]}
+              style={({ pressed }) => [
+                styles.attachAction,
+                { opacity: pressed ? 0.6 : 1, transform: [{ scale: pressed ? 0.94 : 1 }] },
+              ]}
               onPress={() => runAttach(action.onPress)}
             >
               <View style={[styles.attachIconCircle, { backgroundColor: theme.colors.accentSoft }]}>
@@ -167,7 +220,7 @@ function ComposerBase({
               <Text style={[styles.attachLabel, { color: theme.colors.textSecondary }]}>{action.label}</Text>
             </Pressable>
           ))}
-        </View>
+        </Animated.View>
       )}
 
       <View
@@ -185,11 +238,17 @@ function ComposerBase({
       >
         <View style={[styles.inputPill, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}>
           <Pressable onPress={() => setAttachOpen((open) => !open)} hitSlop={8} style={styles.attachButton}>
-            <Icon
-              name={attachOpen ? "close" : "plus"}
-              size={22}
-              color={attachOpen ? theme.colors.accent : theme.colors.textMuted}
-            />
+            {/* Плюс поворачивается в крестик, а не подменяется другой иконкой:
+                так видно, что это одна и та же кнопка. */}
+            <Animated.View
+              style={{
+                transform: [
+                  { rotate: attachProgress.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "45deg"] }) },
+                ],
+              }}
+            >
+              <Icon name="plus" size={22} color={attachOpen ? theme.colors.accent : theme.colors.textMuted} />
+            </Animated.View>
           </Pressable>
           <TextInput
             style={[styles.input, { color: theme.colors.textPrimary }]}
@@ -217,17 +276,22 @@ function ComposerBase({
             <Icon name="send" size={21} color={theme.colors.onAccent} />
           </Pressable>
         ) : (
-          <Pressable
-            style={[
-              styles.sendButton,
-              {
-                backgroundColor: recorderState.isRecording ? theme.colors.danger : theme.colors.accent,
-                transform: [{ scale: recorderState.isRecording ? 1.08 : 1 }],
-              },
-            ]}
-            onPress={() => void handleToggleRecording()}
-          >
-            <Icon name={recorderState.isRecording ? "check" : "mic"} size={21} color={theme.colors.onAccent} />
+          <Pressable onPress={() => void handleToggleRecording()}>
+            {({ pressed }) => (
+              <Animated.View
+                style={[
+                  styles.sendButton,
+                  {
+                    backgroundColor: recorderState.isRecording ? theme.colors.danger : theme.colors.accent,
+                    // Во время записи кнопка «дышит» — видно, что запись идёт,
+                    // даже не читая подсказку в поле ввода.
+                    transform: [{ scale: Animated.multiply(recordScale, pressed ? 0.92 : 1) }],
+                  },
+                ]}
+              >
+                <Icon name={recorderState.isRecording ? "check" : "mic"} size={21} color={theme.colors.onAccent} />
+              </Animated.View>
+            )}
           </Pressable>
         )}
       </View>

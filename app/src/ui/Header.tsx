@@ -68,7 +68,11 @@ export function Header({
       ]}
     >
       {onBack ? (
-        <Pressable onPress={onBack} hitSlop={12} style={styles.backButton}>
+        <Pressable
+          onPress={onBack}
+          hitSlop={12}
+          style={({ pressed }) => [styles.backButton, { opacity: pressed ? 0.5 : 1, transform: [{ scale: pressed ? 0.9 : 1 }] }]}
+        >
           <Icon name="back" size={24} color={theme.colors.accent} />
         </Pressable>
       ) : (

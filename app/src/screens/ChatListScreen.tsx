@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { dmChatId } from "../chat/chatId";
 import { describeFailure, useApp } from "../context/AppContext";
@@ -10,6 +10,7 @@ import type { Theme } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
 import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
+import { DURATION, useTransition } from "../ui/motion";
 
 interface ChatRow {
   chatId: string;
@@ -80,6 +81,10 @@ const ChatRowView = React.memo(function ChatRowView({
   theme: Theme;
   onPress: (row: ChatRow) => void;
 }): React.ReactElement {
+  // Бейдж не появляется рывком, а вырастает — тогда новое сообщение заметно
+  // даже боковым зрением.
+  const badge = useTransition(row.unread > 0, DURATION.fast);
+
   return (
     <Pressable
       style={({ pressed }) => [styles.row, { backgroundColor: pressed ? theme.colors.surfacePressed : "transparent" }]}
@@ -120,11 +125,20 @@ const ChatRowView = React.memo(function ChatRowView({
             {row.preview}
           </Text>
           {row.unread > 0 && (
-            <View style={[styles.badge, { backgroundColor: theme.colors.accent }]}>
+            <Animated.View
+              style={[
+                styles.badge,
+                {
+                  backgroundColor: theme.colors.accent,
+                  opacity: badge,
+                  transform: [{ scale: badge.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) }],
+                },
+              ]}
+            >
               <Text style={[styles.badgeText, { color: theme.colors.onAccent }]}>
                 {row.unread > 99 ? "99+" : row.unread}
               </Text>
-            </View>
+            </Animated.View>
           )}
         </View>
       </View>

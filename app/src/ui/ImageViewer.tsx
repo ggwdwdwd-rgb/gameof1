@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, StyleSheet,
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { prepareForGallery } from "../chat/media";
 import { Icon } from "./Icon";
+import { Toast, useToast } from "./Toast";
 
 /**
  * Полноэкранный просмотр фото с сохранением в галерею и «поделиться».
@@ -28,6 +29,7 @@ export function ImageViewer({
 }): React.ReactElement {
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
+  const { toast, showToast, hideToast } = useToast();
 
   async function handleSave(): Promise<void> {
     if (!uri) return;
@@ -51,7 +53,9 @@ export function ImageViewer({
       } finally {
         if (staged.exists) staged.delete();
       }
-      Alert.alert("Готово", "Фото сохранено в галерею.");
+      // Тост, а не Alert: удачное сохранение не повод перекрывать фото окном с
+      // кнопкой «ОК».
+      showToast("Фото сохранено в галерею", "download");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (/permission/i.test(detail)) {
@@ -117,6 +121,9 @@ export function ImageViewer({
         <Text style={[styles.hint, { paddingBottom: insets.bottom + 18 }]}>
           Сохранить в галерею или поделиться — кнопками сверху
         </Text>
+
+        {/* Тост живёт внутри модалки: снаружи его перекрыл бы просмотрщик. */}
+        <Toast state={toast} onHide={hideToast} />
       </View>
     </Modal>
   );
