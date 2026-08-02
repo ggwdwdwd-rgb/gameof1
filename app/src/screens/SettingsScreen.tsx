@@ -74,6 +74,9 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
     selfTest,
     isAdmin,
     removeMember,
+    backgroundEnabled,
+    backgroundAvailable,
+    setBackgroundEnabled,
   } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -338,6 +341,26 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
               thumbColor={theme.colors.surface}
             />
           </View>
+          <View style={[styles.row, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider }]}>
+            <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+              <Icon name="refresh" size={19} color={theme.colors.accent} />
+            </View>
+            <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Работать в фоне</Text>
+            <Switch
+              value={backgroundEnabled && backgroundAvailable}
+              disabled={!backgroundAvailable}
+              onValueChange={(next) => void setBackgroundEnabled(next)}
+              trackColor={{ true: theme.colors.accent, false: theme.colors.border }}
+              thumbColor={theme.colors.surface}
+            />
+          </View>
+          <View style={[styles.block, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider }]}>
+            <Text style={[styles.hint, { color: theme.colors.textMuted, marginTop: 0 }]}>
+              {backgroundAvailable
+                ? "Пока включено, Cry держит соединение и после сворачивания — уведомления приходят, даже если приложение закрыто. Android требует показывать при этом постоянное уведомление «Cry на связи»: убрать его нельзя, но оно беззвучное и лежит в самом низу шторки."
+                : "Эта сборка приложения не умеет работать в фоне — нужен новый APK. Без неё уведомления приходят только пока Cry открыт."}
+            </Text>
+          </View>
           <Pressable
             style={({ pressed }) => [
               styles.row,
@@ -353,9 +376,13 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
           </Pressable>
           <View style={[styles.block, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider }]}>
             <Text style={[styles.hint, { color: theme.colors.textMuted, marginTop: 0 }]}>
-              Уведомление показывает само приложение, когда получает сообщение — сервер о содержимом не знает. Пока Cry
-              свёрнут, соединение живёт и уведомления приходят; если система выгрузит приложение из памяти, сообщения
-              появятся при следующем открытии.
+              Уведомление показывает само приложение, когда получает сообщение — сервер о содержимом не знает и
+              рассылать их не может даже теоретически.
+            </Text>
+            <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+              Если уведомления приходят только пока Cry открыт, проверьте «Работать в фоне» выше, а затем в настройках
+              телефона: Приложения → Cry → Батарея → «Без ограничений». На телефонах Samsung ещё Батарея → «Спящие
+              приложения» — Cry там быть не должно, иначе система выгружает его сразу после сворачивания.
             </Text>
             {permissionDenied && (
               <Text style={[styles.failure, { color: theme.colors.danger }]}>

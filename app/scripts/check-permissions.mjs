@@ -22,6 +22,11 @@ const REQUIRED = [
   { permission: "android.permission.CAMERA", why: "сканирование QR-кода инвайта" },
   { permission: "android.permission.POST_NOTIFICATIONS", why: "уведомления о сообщениях" },
   { permission: "android.permission.INTERNET", why: "соединение с сервером" },
+  // Без этой пары служба переднего плана не запустится: с Android 14 тип
+  // службы обязателен, а specialUse требует своего разрешения. Ошибка тут
+  // означает, что уведомления снова приходят только при открытом приложении.
+  { permission: "android.permission.FOREGROUND_SERVICE", why: "работа в фоне" },
+  { permission: "android.permission.FOREGROUND_SERVICE_SPECIAL_USE", why: "тип службы переднего плана" },
 ];
 
 let failed = 0;

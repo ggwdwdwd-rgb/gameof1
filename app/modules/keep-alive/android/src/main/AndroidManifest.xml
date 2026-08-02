@@ -1,0 +1,33 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <!--
+    Тип specialUse, а не dataSync. С Android 15 у dataSync есть суточный лимит
+    в 6 часов работы, после чего система службу останавливает — для соединения,
+    которое должно жить постоянно, это не годится. У specialUse лимита нет.
+    Требование обосновывать subtype относится к публикации в Google Play; это
+    приложение раздаётся файлом и в Play не попадает.
+  -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+  <application>
+    <!--
+      Полное имя класса, а не сокращение с точкой: в манифесте библиотеки точка
+      раскрывается относительно её пакета, и полагаться на это незачем.
+
+      stopWithTask="false" — главное здесь: без него смахивание приложения из
+      списка недавних убивало бы службу вместе с процессом, а именно этот
+      случай и нужно пережить.
+    -->
+    <service
+      android:name="expo.modules.keepalive.KeepAliveService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse"
+      android:stopWithTask="false">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="Постоянное шифрованное соединение с личным сервером для доставки сообщений" />
+    </service>
+  </application>
+
+</manifest>

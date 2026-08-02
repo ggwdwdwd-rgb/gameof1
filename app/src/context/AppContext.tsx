@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { createCrypto } from "@family-messenger/crypto";
 import { getCrypto } from "../crypto/sodium";
@@ -37,6 +37,12 @@ import { WsClient, type ConnectionFailure, type ConnectionState } from "../net/w
 import type { InviteCreatedPayload, MsgDeliverPayload, RosterMemberPayload } from "../net/protocol";
 import { saveIdentity } from "../storage/identity";
 import type { DeviceIdentity } from "../storage/identity";
+import {
+  isBackgroundModeAvailable,
+  isBackgroundModeRunning,
+  startBackgroundMode,
+  stopBackgroundMode,
+} from "../../modules/keep-alive";
 import { Emitter } from "../util/emitter";
 import { uuidv4 } from "../util/uuid";
 
@@ -59,6 +65,12 @@ const NOTIFICATIONS_SETTING = "notifications_enabled";
  * поэтому "0" без неё — точно не выбор человека.
  */
 const NOTIFICATIONS_CHOSEN_SETTING = "notifications_chosen";
+/**
+ * Работа в фоне. По умолчанию включена: без неё уведомления приходят только
+ * пока приложение открыто, а это ровно то, чего от мессенджера не ждут.
+ * Выключается тем же переключателем в настройках.
+ */
+const BACKGROUND_SETTING = "background_enabled";
 
 /** Сколько ждём готовности соединения там, где без сервера операция невозможна (создание инвайта). */
 const WAIT_READY_MS = 10_000;
@@ -117,6 +129,10 @@ interface AppContextData {
    * зарегистрированный участник) — клиент только показывает кнопку.
    */
   isAdmin: boolean;
+  /** Включена ли работа в фоне (постоянное уведомление). */
+  backgroundEnabled: boolean;
+  /** Есть ли поддержка работы в фоне в этой сборке приложения. */
+  backgroundAvailable: boolean;
 }
 
 /** Действия: их идентичность не меняется, поэтому эффекты экранов стабильны. */
@@ -143,6 +159,8 @@ interface AppActions {
   renameContact: (userId: string, localName: string | null) => Promise<void>;
   /** Включение и выключение уведомлений о новых сообщениях. */
   setNotificationsEnabled: (enabled: boolean) => Promise<void>;
+  /** Включение и выключение работы в фоне (постоянного уведомления). */
+  setBackgroundEnabled: (enabled: boolean) => Promise<void>;
   /** Какой чат открыт на экране: для него уведомление не показываем. */
   setActiveChat: (chatId: string | null) => void;
   /** Удаление участника из системы — доступно только админу. */
@@ -202,6 +220,7 @@ export function AppProvider({
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [displayName, setDisplayName] = useState(identity.displayName);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [backgroundEnabled, setBackgroundEnabled] = useState(false);
   /**
    * Присутствие не храним в локальной базе: оно живёт только пока есть
    * соединение, и после перезапуска всё равно приходит заново в roster.
@@ -212,10 +231,26 @@ export function AppProvider({
   /** Чат, открытый прямо сейчас: только для него уведомление лишнее. */
   const activeChatRef = useRef<string | null>(null);
   const notificationsRef = useRef(false);
+  const backgroundRef = useRef(false);
   const cryptoRef = useRef<Crypto | null>(null);
   const wsRef = useRef<WsClient | null>(null);
   const contactsRef = useRef<Contact[]>([]);
   const chatEvents = useMemo(() => new Emitter<ChatEvents>(), []);
+
+  /**
+   * Приводит службу переднего плана в соответствие с настройкой и состоянием
+   * связи. Вызывается и при изменении настройки, и на каждое изменение
+   * состояния соединения — подпись в постоянном уведомлении должна говорить
+   * правду, иначе оно вводит в заблуждение хуже, чем его отсутствие.
+   */
+  const applyBackgroundMode = useCallback((connected: boolean): void => {
+    if (!backgroundRef.current) return;
+    // Начиная с Android 12 запустить службу переднего плана из фона нельзя —
+    // система бросает исключение. Пока приложение открыто, запуск разрешён;
+    // уже запущенной службе можно обновлять подпись и из фона.
+    if (!appActiveRef.current && !isBackgroundModeRunning()) return;
+    startBackgroundMode("Cry", connected ? "На связи — сообщения дойдут" : "Нет соединения, переподключаюсь");
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -235,6 +270,11 @@ export function AppProvider({
       // ws.connect() (см. комментарий там же).
       const stored = await getSetting(NOTIFICATIONS_SETTING);
       const chosenByUser = (await getSetting(NOTIFICATIONS_CHOSEN_SETTING)) === "1";
+      // Работа в фоне по умолчанию включена: без неё уведомления приходят
+      // только пока приложение открыто.
+      const backgroundOn = (await getSetting(BACKGROUND_SETTING)) !== "0";
+      backgroundRef.current = backgroundOn;
+      if (!cancelled) setBackgroundEnabled(backgroundOn);
       notificationsRef.current = stored === "1";
       if (!cancelled) setNotificationsEnabled(stored === "1");
 
@@ -252,6 +292,7 @@ export function AppProvider({
 
       ws.events.on("state", (state) => {
         setConnectionState(state);
+        applyBackgroundMode(state === "connected");
         if (state !== "connected") {
           // Без соединения мы не знаем, кто в сети: показывать прежнее «в сети»
           // было бы обманом. Время последнего появления при этом сохраняем.
@@ -561,6 +602,9 @@ export function AppProvider({
       if (nextState !== "active") return;
       const ws = wsRef.current;
       if (ws && !ws.isReady()) ws.forceReconnect();
+      // Службу могли убить, пока приложение было свёрнуто. Возврат на экран —
+      // единственный момент, когда её снова разрешено запустить.
+      applyBackgroundMode(ws?.state === "connected");
     });
 
     return () => {
@@ -736,6 +780,13 @@ export function AppProvider({
         // записанного самим приложением (см. NOTIFICATIONS_CHOSEN_SETTING).
         await setSetting(NOTIFICATIONS_CHOSEN_SETTING, "1");
       },
+      async setBackgroundEnabled(enabled) {
+        backgroundRef.current = enabled;
+        setBackgroundEnabled(enabled);
+        await setSetting(BACKGROUND_SETTING, enabled ? "1" : "0");
+        if (enabled) applyBackgroundMode(wsRef.current?.state === "connected");
+        else stopBackgroundMode();
+      },
       setActiveChat(chatId) {
         activeChatRef.current = chatId;
       },
@@ -772,6 +823,17 @@ export function AppProvider({
           "Уведомления включены",
           notificationsRef.current && permission === "granted",
           `выключатель: ${notificationsRef.current ? "вкл" : "выкл"}, разрешение: ${permission}`,
+        );
+
+        // Работа в фоне: без неё уведомления приходят только пока приложение
+        // открыто, и это отдельная причина от двух предыдущих.
+        const bgAvailable = isBackgroundModeAvailable();
+        add(
+          "Работа в фоне",
+          backgroundRef.current && bgAvailable && isBackgroundModeRunning(),
+          !bgAvailable
+            ? "нет в этой сборке — нужен новый APK"
+            : `настройка: ${backgroundRef.current ? "вкл" : "выкл"}, служба: ${isBackgroundModeRunning() ? "работает" : "не запущена"}`,
         );
 
         const peer = peers[0];
@@ -869,8 +931,9 @@ export function AppProvider({
       },
     };
     // Только стабильные зависимости: identity не меняется за жизнь провайдера,
-    // chatEvents создан через useMemo без зависимостей, остальное — рефы.
-  }, [identity, chatEvents]);
+    // chatEvents и applyBackgroundMode созданы через useMemo/useCallback без
+    // зависимостей, остальное — рефы.
+  }, [identity, chatEvents, applyBackgroundMode]);
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -884,6 +947,8 @@ export function AppProvider({
       notificationsEnabled,
       displayName,
       isAdmin,
+      backgroundEnabled,
+      backgroundAvailable: isBackgroundModeAvailable(),
       ...actions,
     }),
     [
@@ -897,6 +962,7 @@ export function AppProvider({
       notificationsEnabled,
       displayName,
       isAdmin,
+      backgroundEnabled,
       actions,
     ],
   );

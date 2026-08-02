@@ -41,5 +41,10 @@
     "check:android": "node scripts/check-permissions.mjs",
     "check:send": "tsx scripts/check-send.mjs"
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
+  }
 }
