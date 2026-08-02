@@ -5,6 +5,12 @@ interface Connection {
   socket: WebSocket;
   userId: string;
   deviceId: string;
+  /**
+   * Смотрит ли человек на телефон прямо сейчас. Приходит от клиента пакетом
+   * presence.set. Открытое соединение само по себе этого больше не означает:
+   * со службой переднего плана оно живёт и с погашенным экраном.
+   */
+  active: boolean;
 }
 
 // Простой in-memory реестр авторизованных соединений на процесс.
@@ -13,7 +19,16 @@ interface Connection {
 const connections = new Map<string, Connection>();
 
 export function registerConnection(deviceId: string, userId: string, socket: WebSocket): void {
-  connections.set(deviceId, { socket, userId, deviceId });
+  // active: true при подключении — приложение только что открыли.
+  connections.set(deviceId, { socket, userId, deviceId, active: true });
+}
+
+/** Возвращает true, если значение изменилось (значит, надо рассылать presence). */
+export function setConnectionActive(deviceId: string, active: boolean): boolean {
+  const conn = connections.get(deviceId);
+  if (!conn || conn.active === active) return false;
+  conn.active = active;
+  return true;
 }
 
 export function unregisterConnection(deviceId: string): void {
@@ -26,14 +41,14 @@ export function unregisterConnection(deviceId: string): void {
  */
 export function isUserOnline(userId: string): boolean {
   for (const conn of connections.values()) {
-    if (conn.userId === userId) return true;
+    if (conn.userId === userId && conn.active) return true;
   }
   return false;
 }
 
 /** Все, кто сейчас на связи — для снимка при подключении. */
 export function onlineUserIds(): string[] {
-  return [...new Set([...connections.values()].map((conn) => conn.userId))];
+  return [...new Set([...connections.values()].filter((conn) => conn.active).map((conn) => conn.userId))];
 }
 
 /** Остались ли у участника ещё соединения (проверяется после отключения одного). */

@@ -24,6 +24,7 @@ interface KeepAliveNativeModule {
   start: (title: string, text: string) => void;
   stop: () => void;
   isRunning: () => boolean;
+  isScreenOn: () => boolean;
 }
 
 const native =
@@ -64,5 +65,25 @@ export function isBackgroundModeRunning(): boolean {
     return native.isRunning();
   } catch {
     return false;
+  }
+}
+
+/**
+ * Включён ли экран телефона.
+ *
+ * Отдельно от «приложение свёрнуто»: с работой в фоне приложение живёт всегда,
+ * а гашение экрана не обязательно приходит событием сворачивания. Без этой
+ * проверки сообщения помечались прочитанными и человек показывался «в сети»,
+ * пока телефон лежал с погашенным экраном.
+ *
+ * true, если ответить нечем: лучше вести себя как раньше, чем молча перестать
+ * отправлять квитанции.
+ */
+export function isScreenOn(): boolean {
+  if (!native?.isScreenOn) return true;
+  try {
+    return native.isScreenOn();
+  } catch {
+    return true;
   }
 }

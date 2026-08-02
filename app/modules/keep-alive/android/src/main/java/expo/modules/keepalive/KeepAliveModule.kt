@@ -1,7 +1,9 @@
 package expo.modules.keepalive
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -47,6 +49,25 @@ class KeepAliveModule : Module() {
 
     Function("isRunning") {
       KeepAliveService.isRunning
+    }
+
+    /**
+     * Включён ли экран.
+     *
+     * Нужно, чтобы не отмечать сообщения прочитанными и не показывать человека
+     * «в сети», пока телефон лежит с погашенным экраном. Полагаться на одно
+     * событие сворачивания приложения нельзя: гашение экрана его не всегда
+     * вызывает, а соединение при работе в фоне живёт постоянно, так что само
+     * по себе оно больше ничего не говорит о том, смотрит человек на телефон
+     * или нет.
+     *
+     * true при недоступности PowerManager — лучше ошибиться в сторону обычного
+     * поведения, чем молча перестать отправлять квитанции.
+     */
+    Function("isScreenOn") {
+      val context = appContext.reactContext ?: return@Function true
+      val manager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+      manager?.isInteractive ?: true
     }
   }
 }

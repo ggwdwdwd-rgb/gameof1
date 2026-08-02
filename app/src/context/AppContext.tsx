@@ -40,6 +40,7 @@ import type { DeviceIdentity } from "../storage/identity";
 import {
   isBackgroundModeAvailable,
   isBackgroundModeRunning,
+  isScreenOn,
   startBackgroundMode,
   stopBackgroundMode,
 } from "../../modules/keep-alive";
@@ -232,6 +233,8 @@ export function AppProvider({
   const activeChatRef = useRef<string | null>(null);
   const notificationsRef = useRef(false);
   const backgroundRef = useRef(false);
+  /** Что об активности уже сказано серверу — чтобы не повторять один и тот же пакет. */
+  const lastReportedActiveRef = useRef(true);
   const cryptoRef = useRef<Crypto | null>(null);
   const wsRef = useRef<WsClient | null>(null);
   const contactsRef = useRef<Contact[]>([]);
@@ -243,6 +246,20 @@ export function AppProvider({
    * состояния соединения — подпись в постоянном уведомлении должна говорить
    * правду, иначе оно вводит в заблуждение хуже, чем его отсутствие.
    */
+  /**
+   * Сообщает серверу, смотрит ли человек на телефон.
+   *
+   * Раньше «в сети» вычислялось из наличия соединения, и этого хватало:
+   * свёрнутое приложение Android быстро выгружал. Со службой переднего плана
+   * соединение живёт всегда, и без явного сообщения человек висел бы «в сети» с
+   * телефоном в кармане.
+   */
+  const reportActivity = useCallback((): void => {
+    const active = appActiveRef.current && isScreenOn();
+    if (active === lastReportedActiveRef.current) return;
+    if (wsRef.current?.setActive(active) === true) lastReportedActiveRef.current = active;
+  }, []);
+
   const applyBackgroundMode = useCallback((connected: boolean): void => {
     if (!backgroundRef.current) return;
     // Начиная с Android 12 запустить службу переднего плана из фона нельзя —
@@ -264,7 +281,10 @@ export function AppProvider({
    */
   const markChatReadIfVisible = useCallback(
     async (chatId: string): Promise<void> => {
-      if (!appActiveRef.current) return;
+      // Погашенный экран — это не «прочитано», даже если приложение формально
+      // активно: событие сворачивания при гашении приходит не на всех
+      // прошивках, поэтому спрашиваем состояние экрана напрямую.
+      if (!appActiveRef.current || !isScreenOn()) return;
 
       // Уведомления этого чата больше не нужны — пользователь его открыл.
       void dismissChat(chatId);
@@ -335,6 +355,10 @@ export function AppProvider({
           return;
         }
         setConnectionFailure(null);
+        // После переподключения сервер считает устройство активным — если это
+        // не так, поправляем сразу.
+        lastReportedActiveRef.current = true;
+        reportActivity();
         // Квитанции, не ушедшие из-за отсутствия связи, досылаем один раз при
         // подключении. Повторять их постоянно нельзя — именно это раньше и
         // создавало поток лишних пакетов.
@@ -634,6 +658,7 @@ export function AppProvider({
     // если её нет, переподключаемся сразу, не дожидаясь backoff-таймера.
     const appStateSub = AppState.addEventListener("change", (nextState) => {
       appActiveRef.current = nextState === "active";
+      reportActivity();
       if (nextState !== "active") return;
       const ws = wsRef.current;
       if (ws && !ws.isReady()) ws.forceReconnect();
@@ -646,8 +671,17 @@ export function AppProvider({
       if (openChat !== null) void markChatReadIfVisible(openChat);
     });
 
+    /**
+     * Гашение экрана не на всех прошивках приходит событием сворачивания
+     * приложения, а спросить состояние экрана можно только опросом. Раз в 15
+     * секунд — дешёвый нативный вызов, зато «в сети» и квитанции перестают
+     * врать, когда телефон просто лежит.
+     */
+    const activityTimer = setInterval(reportActivity, 15_000);
+
     return () => {
       cancelled = true;
+      clearInterval(activityTimer);
       appStateSub.remove();
       for (const timer of typingTimers.values()) clearTimeout(timer);
       wsRef.current?.disconnect();

@@ -14,6 +14,8 @@ import {
   broadcastToAllExcept,
   closeDevices,
   hasOtherConnections,
+  isUserOnline,
+  setConnectionActive,
   registerConnection,
   send,
   sendToDevice,
@@ -30,6 +32,7 @@ import {
   type MsgDeletePayload,
   type MemberRemovePayload,
   type MsgSendPayload,
+  type PresenceSetPayload,
   type ProfileUpdatePayload,
   type TypingPayload,
 } from "./types.js";
@@ -214,6 +217,25 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           sendToDevice(recipientDeviceId, envelope("msg.deleted", { msgId: payload.msgId, chatId: result.chatId, byUserId: userId }));
         }
         send(socket, envelope("msg.deleted", { msgId: payload.msgId, chatId: result.chatId, byUserId: userId }));
+        return;
+      }
+
+      /**
+       * Клиент сообщает, смотрит ли человек на телефон.
+       *
+       * До работы в фоне «в сети» означало «есть соединение», и этого хватало:
+       * свёрнутое приложение Android быстро выгружал. Со службой переднего плана
+       * соединение живёт всегда, поэтому теперь активность приходит явно —
+       * иначе человек висел бы «в сети» с погашенным экраном в кармане.
+       */
+      if (parsed.type === "presence.set") {
+        const payload = parsed.payload as PresenceSetPayload;
+        if (!setConnectionActive(deviceId, payload.active === true)) return;
+        // Рассылаем только если состояние участника целиком изменилось: при
+        // двух устройствах уход одного в фон ещё не значит, что человек ушёл.
+        const online = isUserOnline(userId);
+        const lastSeenAt = online ? null : touchLastSeen(userId);
+        broadcastToAllExcept(deviceId, envelope("presence", { userId, online, lastSeenAt }));
         return;
       }
 

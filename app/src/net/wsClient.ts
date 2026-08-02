@@ -139,6 +139,17 @@ export class WsClient {
     return this.rawSend(this.ws, "msg.ack", { msgId, chatId, status });
   }
 
+  /**
+   * Сообщает серверу, смотрит ли человек на телефон.
+   *
+   * Открытое соединение больше не означает «в сети»: со службой переднего плана
+   * оно живёт и с погашенным экраном. false, если пакет не ушёл.
+   */
+  setActive(active: boolean): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "presence.set", { active });
+  }
+
   /** Удаление участника из системы. false, если пакет не ушёл. */
   removeMember(userId: string): boolean {
     if (!this.ws) return false;

@@ -365,6 +365,35 @@ alice.send("msg.delete", { msgId: clientMsgId, chatId });
 const deleted = await bob2.wait("msg.deleted", (m) => m.payload.msgId === clientMsgId);
 check("автор удаляет сообщение у всех", Boolean(deleted));
 
+// ── 10b. «В сети» означает «человек у телефона», а не «сокет открыт» ─────────
+// Со службой переднего плана соединение живёт постоянно, поэтому активность
+// приходит от клиента явно. Без этого человек висел бы «в сети» с погашенным
+// экраном в кармане.
+// Историю presence чистим ДО отправки: Боб уже отключался выше, и подходящий
+// пакет лежит в полученном — wait нашёл бы его и проверка прошла бы вслепую.
+alice.received = alice.received.filter((m) => m.type !== "presence");
+bob2.send("presence.set", { active: false });
+const wentAway = await alice.wait("presence", (m) => m.payload.userId === bob.userId && m.payload.online === false);
+check("уход в фон рассылается как «не в сети»", Boolean(wentAway));
+check("вместе с уходом приходит время последнего появления", typeof wentAway.payload.lastSeenAt === "number");
+
+// Повтор того же состояния рассылать незачем.
+alice.received = alice.received.filter((m) => m.type !== "presence");
+bob2.send("presence.set", { active: false });
+await new Promise((r) => setTimeout(r, 300));
+// Только про Боба: рядом отключаются другие участники теста, и их presence
+// попал бы в это окно, сделав проверку случайной.
+const extraPresence = alice.received.filter((m) => m.type === "presence" && m.payload.userId === bob.userId);
+check(
+  "повтор того же состояния не рассылается",
+  extraPresence.length === 0,
+  JSON.stringify(extraPresence.map((m) => m.payload)),
+);
+
+bob2.send("presence.set", { active: true });
+const cameBack = await alice.wait("presence", (m) => m.payload.userId === bob.userId && m.payload.online === true);
+check("возврат в приложение рассылается как «в сети»", Boolean(cameBack));
+
 // ── 11b. Удаление участника — только первым зарегистрированным ──────────────
 // Алиса зарегистрировалась первой, значит распоряжаться составом может только
 // она. Права здесь важнее всего остального: ошибка означает, что любой
