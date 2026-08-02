@@ -1,8 +1,8 @@
-import * as LocalAuthentication from "expo-local-authentication";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getCrypto } from "../crypto/sodium";
+import { authenticateWithBiometrics, isBiometricsUsable } from "../lock/biometrics";
 import type { LockConfig } from "../storage/lock";
 import { useTheme } from "../theme/ThemeContext";
 import { Icon } from "../ui/Icon";
@@ -39,19 +39,9 @@ export function LockScreen({
   const [biometricsAvailable, setBiometricsAvailable] = useState(false);
 
   const runBiometrics = useCallback(async (): Promise<void> => {
-    try {
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: "Разблокировать Cry",
-        cancelLabel: "Ввести код",
-        // Системный PIN/пароль телефона как замена отпечатку не подходит: он
-        // защищает сам телефон, и человек, у которого телефон уже разблокирован,
-        // прошёл бы эту проверку сразу.
-        disableDeviceFallback: true,
-      });
-      if (result.success) onUnlocked();
-    } catch {
-      // Отказ или отсутствие датчика — просто остаёмся на вводе кода.
-    }
+    // Отказ, отмена и отсутствие датчика — просто остаёмся на вводе кода,
+    // исключение наружу не выходит (см. lock/biometrics.ts).
+    if (await authenticateWithBiometrics()) onUnlocked();
   }, [onUnlocked]);
 
   // Биометрию предлагаем сразу при появлении экрана: иначе её пришлось бы
@@ -60,11 +50,7 @@ export function LockScreen({
   useEffect(() => {
     void (async () => {
       if (!config.biometrics) return;
-      const [hardware, enrolled] = await Promise.all([
-        LocalAuthentication.hasHardwareAsync(),
-        LocalAuthentication.isEnrolledAsync(),
-      ]);
-      if (!hardware || !enrolled) return;
+      if (!(await isBiometricsUsable())) return;
       setBiometricsAvailable(true);
       if (offered.current) return;
       offered.current = true;

@@ -33,6 +33,7 @@ import {
 } from "../notify/notifications";
 import { decryptDeliveredMessage, encryptForChat } from "../chat/encryption";
 import { dmChatId } from "../chat/chatId";
+import { isBiometricsSupported } from "../lock/biometrics";
 import { isAppLocked } from "../lock/lockState";
 import { saveIncomingEnvelope, type LocalMediaMeta } from "../chat/media";
 import { WsClient, type ConnectionFailure, type ConnectionState } from "../net/wsClient";
@@ -984,6 +985,17 @@ export function AppProvider({
           !bgAvailable
             ? "нет в этой сборке — нужен новый APK"
             : `настройка: ${backgroundRef.current ? "вкл" : "выкл"}, служба: ${isBackgroundModeRunning() ? "работает" : "не запущена"}`,
+        );
+
+        // Нативные модули, добавленные позже сборки, — отдельная строка: их
+        // отсутствие раньше валило приложение при запуске, а теперь просто
+        // отключает функцию, и это должно быть видно, а не угадываться.
+        add(
+          "Нативные части на месте",
+          isBackgroundModeAvailable() && isBiometricsSupported(),
+          `фон: ${isBackgroundModeAvailable() ? "есть" : "нет"}, биометрия: ${isBiometricsSupported() ? "есть" : "нет"}${
+            isBackgroundModeAvailable() && isBiometricsSupported() ? "" : " — нужен новый APK"
+          }`,
         );
 
         const peer = peers[0];

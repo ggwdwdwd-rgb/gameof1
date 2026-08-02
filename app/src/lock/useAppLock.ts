@@ -22,6 +22,25 @@ export interface AppLock {
 }
 
 /**
+ * Чтение настроек, которое не может закончиться исключением.
+ *
+ * expo-secure-store читает Android Keystore, и это не «просто файл»: обращение
+ * может упасть — испорченная запись, недоступное хранилище. Отказ здесь означал
+ * бы, что приложение навсегда осталось в состоянии «настройки ещё читаются», а
+ * значит без соединения и без отправки сообщений. Считаем, что блокировки нет:
+ * потерять её настройку не страшно (задаётся заново одной кнопкой), а потерять
+ * работающее приложение — страшно.
+ */
+async function readConfigSafely(): Promise<LockConfig | null> {
+  try {
+    return await loadLockConfig();
+  } catch (error) {
+    console.warn("не удалось прочитать настройки блокировки", error);
+    return null;
+  }
+}
+
+/**
  * Блокировка приложения PIN-кодом.
  *
  * Живёт выше всех экранов, но НЕ выше соединения: пока показан экран
@@ -57,7 +76,7 @@ export function useAppLock(): AppLock {
   }, []);
 
   const reload = useCallback(async (): Promise<LockConfig | null> => {
-    const stored = await loadLockConfig();
+    const stored = await readConfigSafely();
     configRef.current = stored;
     setConfig(stored);
     // Блокировку только что выключили — держать запертым больше нечем. Обратный
@@ -70,7 +89,7 @@ export function useAppLock(): AppLock {
 
   useEffect(() => {
     void (async () => {
-      const stored = await loadLockConfig();
+      const stored = await readConfigSafely();
       configRef.current = stored;
       setConfig(stored);
       // Холодный запуск всегда требует код: приложение только что открыли, и

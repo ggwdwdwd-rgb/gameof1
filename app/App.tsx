@@ -74,7 +74,9 @@ function Root(): React.ReactElement {
     );
   }
 
-  if (loading || lock.state === "loading") {
+  // Ждём только identity: без неё нечем ни подключаться, ни шифровать.
+  // Настройки блокировки здесь НЕ ждём — см. комментарий у оверлея ниже.
+  if (loading) {
     return (
       <View style={[styles.loading, { backgroundColor: theme.colors.background }]}>
         <LogoMark size={82} />
@@ -134,6 +136,17 @@ function Root(): React.ReactElement {
       {lock.state === "locked" && lock.config !== null && (
         <LockScreen config={lock.config} onUnlocked={lock.unlock} />
       )}
+      {/* Настройки блокировки читаются из Android Keystore, и до ответа ещё
+          неизвестно, надо ли спрашивать код. Поэтому содержимое закрываем
+          заглушкой — но AppProvider уже смонтирован и соединение устанавливается.
+          Раньше здесь стоял ранний return, то есть чтение Keystore задерживало
+          подключение, а его сбой оставлял приложение навсегда на этой заставке:
+          «на связи» не появлялось и сообщения не отправлялись. */}
+      {lock.state === "loading" && (
+        <View style={[styles.lockPlaceholder, { backgroundColor: theme.colors.background }]}>
+          <LogoMark size={82} />
+        </View>
+      )}
       <StatusBar style={theme.colors.statusBar} />
     </AppProvider>
   );
@@ -152,4 +165,13 @@ export default function App(): React.ReactElement {
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   loadingSpinner: { marginTop: 26 },
+  lockPlaceholder: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

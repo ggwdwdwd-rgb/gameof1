@@ -14,6 +14,7 @@ import { Icon, type IconName } from "../ui/Icon";
 import { RenameModal } from "../ui/RenameModal";
 import { describePresence } from "../ui/presence";
 import { PinSetupModal } from "../ui/PinSetupModal";
+import { isBiometricsSupported } from "../lock/biometrics";
 import { getCrypto } from "../crypto/sodium";
 import { clearLockConfig, loadLockConfig, saveLockConfig, type LockConfig } from "../storage/lock";
 import { buildLabel } from "../util/buildInfo";
@@ -128,6 +129,9 @@ export function SettingsScreen({
 
   /** Блокировка приложения: null — выключена. */
   const [lock, setLock] = useState<LockConfig | null>(null);
+  // Нативной части биометрии может не быть в сборке — тогда переключатель
+  // обещал бы то, чего приложение не умеет.
+  const biometricsSupported = isBiometricsSupported();
   const [pinMode, setPinMode] = useState<"set" | "change" | "disable" | null>(null);
 
   const refreshLock = useCallback(async () => {
@@ -532,9 +536,15 @@ export function SettingsScreen({
                 <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
                   <Icon name="check" size={19} color={theme.colors.accent} />
                 </View>
-                <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Отпечаток или лицо</Text>
+                <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>
+                  Отпечаток или лицо
+                  {!biometricsSupported && (
+                    <Text style={{ color: theme.colors.textMuted }}>{"\nнет в этой сборке"}</Text>
+                  )}
+                </Text>
                 <Switch
-                  value={lock.biometrics}
+                  value={lock.biometrics && biometricsSupported}
+                  disabled={!biometricsSupported}
                   onValueChange={(next) => void applyLock({ ...lock, biometrics: next })}
                   trackColor={{ true: theme.colors.accent, false: theme.colors.border }}
                   thumbColor={theme.colors.surface}
@@ -639,6 +649,11 @@ export function SettingsScreen({
                 иначе не выяснить. nativeBuildVersion — это versionCode, он
                 растёт с каждой сборкой (autoIncrement в eas.json). */}
             <DiagRow label="Версия" value={buildLabel} theme={theme} />
+            <DiagRow
+              label="Блокировка"
+              value={lock === null ? "выключена" : lock.biometrics ? "код + биометрия" : "код"}
+              theme={theme}
+            />
             <DiagRow label="Соединение" value={connectionState} theme={theme} />
             <DiagRow label="Участников известно" value={String(activeContacts.length)} theme={theme} />
             <DiagRow label="Сообщений в базе" value={diag ? String(diag.messages) : "…"} theme={theme} />
