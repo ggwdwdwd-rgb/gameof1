@@ -4,6 +4,7 @@ export interface UserSummary {
   id: string;
   displayName: string;
   createdAt: number;
+  isAdmin: boolean;
   devices: number;
   messages: number;
 }
@@ -17,37 +18,72 @@ export interface RemovedUserStats {
 }
 
 /**
- * Кто «первый» — тот и распоряжается составом.
+ * Право распоряжаться составом — явный признак в базе (users.is_admin).
  *
- * Отдельной роли админа в базе нет и не нужно: система создаётся одним
- * человеком, который поднял сервер и выпустил первый код. Он же
- * зарегистрировался раньше всех, поэтому «самый ранний участник» — это
- * естественный и не требующий отдельной таблицы признак. Тот же приём уже
- * используется при выпуске инвайтов из CLI.
+ * Сначала он был неявным: админом считался первый зарегистрированный. Это
+ * ломалось на самой частой операции — удалении своего же старого аккаунта после
+ * переустановки приложения: права молча уходили к следующему по времени, то есть
+ * к другому человеку, и вернуть их было нечем. Теперь признак назначается и
+ * снимается командой (npm run set-admin), а не вычисляется из порядка.
  */
-export function adminUserId(): string | null {
+export function isAdmin(userId: string): boolean {
+  const row = db.prepare("SELECT is_admin FROM users WHERE id = ?").get(userId) as { is_admin: number } | undefined;
+  if (row === undefined) return false;
+  if (row.is_admin === 1) return true;
+  // Страховка: если признака нет ни у кого (например, единственного админа
+  // удалили из базы руками), возвращаемся к прежнему правилу — иначе система
+  // осталась бы вообще без управления.
+  return adminCount() === 0 && earliestUserId() === userId;
+}
+
+export function adminCount(): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM users WHERE is_admin = 1").get() as { n: number };
+  return row.n;
+}
+
+export function earliestUserId(): string | null {
   const row = db.prepare("SELECT id FROM users ORDER BY created_at ASC LIMIT 1").get() as { id: string } | undefined;
   return row?.id ?? null;
 }
 
-export function isAdmin(userId: string): boolean {
-  return adminUserId() === userId;
+/** Назначение и снятие права. Возвращает false, если участника нет. */
+export function setAdmin(userId: string, value: boolean): boolean {
+  const result = db.prepare("UPDATE users SET is_admin = ? WHERE id = ?").run(value ? 1 : 0, userId);
+  return result.changes > 0;
+}
+
+/**
+ * Первый участник в пустой системе становится главным автоматически.
+ *
+ * Вызывается при регистрации по инвайту: иначе в новой установке главного не
+ * было бы вовсе, и назначить его можно было бы только из базы руками.
+ */
+export function grantAdminIfNobodyHasIt(userId: string): void {
+  if (adminCount() === 0) setAdmin(userId, true);
 }
 
 export function listUsers(): UserSummary[] {
   return (
     db
       .prepare(
-        `SELECT u.id, u.display_name, u.created_at,
+        `SELECT u.id, u.display_name, u.created_at, u.is_admin,
                 (SELECT COUNT(*) FROM devices d  WHERE d.user_id = u.id)      AS devices,
                 (SELECT COUNT(*) FROM messages m WHERE m.from_user_id = u.id) AS messages
          FROM users u ORDER BY u.created_at ASC`,
       )
-      .all() as { id: string; display_name: string; created_at: number; devices: number; messages: number }[]
+      .all() as {
+      id: string;
+      display_name: string;
+      created_at: number;
+      is_admin: number;
+      devices: number;
+      messages: number;
+    }[]
   ).map((row) => ({
     id: row.id,
     displayName: row.display_name,
     createdAt: row.created_at,
+    isAdmin: row.is_admin === 1,
     devices: row.devices,
     messages: row.messages,
   }));
@@ -60,6 +96,17 @@ export function userExists(userId: string): boolean {
 /** deviceId участника — нужны, чтобы разорвать его соединения после удаления. */
 export function deviceIdsOf(userId: string): string[] {
   return (db.prepare("SELECT id FROM devices WHERE user_id = ?").all(userId) as { id: string }[]).map((d) => d.id);
+}
+
+/**
+ * Оставит ли удаление этого участника систему без главного.
+ *
+ * Проверяется до удаления: система без управления — это тупик, из которого
+ * выходят только правкой базы руками.
+ */
+export function wouldLeaveNoAdmin(userId: string): boolean {
+  const row = db.prepare("SELECT is_admin FROM users WHERE id = ?").get(userId) as { is_admin: number } | undefined;
+  return row?.is_admin === 1 && adminCount() <= 1;
 }
 
 /**

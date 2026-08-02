@@ -9,7 +9,7 @@ import { createInvite } from "../invites.js";
 import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from "./handlers/message.js";
 import { getRosterExcluding, touchLastSeen } from "./handlers/roster.js";
 import { updateDisplayName } from "./handlers/profile.js";
-import { deviceIdsOf, isAdmin, removeUser, userExists } from "../users.js";
+import { deviceIdsOf, isAdmin, removeUser, userExists, wouldLeaveNoAdmin } from "../users.js";
 import {
   broadcastToAllExcept,
   closeDevices,
@@ -231,6 +231,18 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
         }
         if (!userExists(payload.userId)) {
           send(socket, envelope("error", { code: "NO_SUCH_USER", message: "Такого участника нет" }));
+          return;
+        }
+        // Без главного система становится тупиком: вернуть право можно было бы
+        // только правкой базы руками.
+        if (wouldLeaveNoAdmin(payload.userId)) {
+          send(
+            socket,
+            envelope("error", {
+              code: "LAST_ADMIN",
+              message: "Это единственный главный участник — сначала назначьте главным другого",
+            }),
+          );
           return;
         }
 

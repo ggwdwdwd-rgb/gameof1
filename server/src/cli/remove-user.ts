@@ -18,7 +18,7 @@
 // правды, и участник, которого в нём нет, удаляется из локальной базы вместе с
 // перепиской (см. AppContext, обработчик roster).
 import { runMigrations } from "../db/migrate.js";
-import { listUsers, removeUser } from "../users.js";
+import { listUsers, removeUser, wouldLeaveNoAdmin } from "../users.js";
 
 runMigrations();
 
@@ -32,9 +32,9 @@ const users = listUsers();
 function printUsers(): void {
   console.log("\nУчастники (по времени регистрации):\n");
   users.forEach((user, index) => {
-    const first = index === 0 ? "  ← самый первый (он же распоряжается составом)" : "";
+    const mark = user.isAdmin ? "  ← ГЛАВНЫЙ (распоряжается составом)" : "";
     console.log(`  ${index + 1}. ${user.displayName}`);
-    console.log(`     id: ${user.id}${first}`);
+    console.log(`     id: ${user.id}${mark}`);
     console.log(
       `     зарегистрирован ${new Date(user.createdAt).toLocaleString("ru-RU")}, устройств: ${user.devices}, сообщений: ${user.messages}`,
     );
@@ -55,6 +55,16 @@ const user = users.find((u) => u.id === target);
 if (!user) {
   printUsers();
   console.error(`Участника с id ${target} нет. Скопируй id из списка выше.`);
+  process.exit(1);
+}
+
+// Систему нельзя оставить без главного: вернуть право потом можно было бы
+// только правкой базы руками.
+if (wouldLeaveNoAdmin(user.id)) {
+  console.error("");
+  console.error(`${user.displayName} — единственный главный. Сначала назначь главным другого:`);
+  console.error("  node dist/cli/set-admin.js --user=<ID> --sole");
+  console.error("");
   process.exit(1);
 }
 

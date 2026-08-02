@@ -31,10 +31,11 @@ on:
           - status # кто зарегистрирован, счётчики, коды
           - users # список участников с их id
           - remove-user # удалить участника (нужен user_id)
+          - set-admin # сделать участника главным (нужен user_id)
           - logs # последние строки логов сервера
           - invite # выпустить новый код приглашения
       user_id:
-        description: "id участника — только для remove-user (взять из действия users)"
+        description: "id участника — для remove-user и set-admin (взять из действия users)"
         required: false
         type: string
 
@@ -66,10 +67,14 @@ jobs:
 
       - name: Проверить аргументы действия
         run: |
-          if [ "${{ inputs.action }}" = "remove-user" ] && [ -z "${{ inputs.user_id }}" ]; then
-            echo "::error::Для remove-user нужно указать user_id. Сначала запусти действие users и скопируй id."
-            exit 1
-          fi
+          case "${{ inputs.action }}" in
+            remove-user|set-admin)
+              if [ -z "${{ inputs.user_id }}" ]; then
+                echo "::error::Для действия ${{ inputs.action }} нужно указать user_id. Сначала запусти действие users и скопируй id."
+                exit 1
+              fi
+              ;;
+          esac
 
       - name: Подготовить доступ по SSH
         env:
@@ -110,6 +115,11 @@ jobs:
               ;;
             remove-user)
               REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/remove-user.js --user='${{ inputs.user_id }}'"
+              ;;
+            set-admin)
+              # --sole: право остаётся только у указанного участника. Именно это
+              # имеют в виду, когда говорят «сделай главным меня».
+              REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/set-admin.js --user='${{ inputs.user_id }}' --sole"
               ;;
             logs)
               REMOTE="cd $PROJECT_DIR && docker compose logs --tail=120 server"

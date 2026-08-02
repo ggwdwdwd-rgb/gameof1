@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "../../db/index.js";
+import { grantAdminIfNobodyHasIt } from "../../users.js";
 import type { InviteRedeemPayload } from "../types.js";
 
 interface InviteRow {
@@ -37,6 +38,10 @@ export function handleInviteRedeem(payload: InviteRedeemPayload): InviteRedeemRe
     db.prepare("UPDATE invites SET used_at = ?, used_by = ? WHERE code = ?").run(now, userId, payload.code);
   });
   tx();
+
+  // Самый первый участник в пустой системе становится главным: иначе назначить
+  // его было бы нечем, кроме правки базы руками.
+  grantAdminIfNobodyHasIt(userId);
 
   return { ok: true, userId };
 }
