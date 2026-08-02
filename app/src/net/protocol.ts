@@ -51,6 +51,12 @@ export interface RosterMemberPayload {
   identityPublicKey: string;
   encryptionPublicKey: string;
   joinedAt: number;
+  /**
+   * Доступ устройства отозван (потерянный телефон). Контакт и переписку клиент
+   * сохраняет: отзыв обратим, а прежние сообщения расшифровываются его ключами.
+   * Может отсутствовать: старый сервер этого поля не присылал.
+   */
+  revoked?: boolean;
 }
 
 export interface RosterSnapshotPayload {
@@ -135,6 +141,18 @@ export interface MemberUpdatedPayload {
 /** Участника удалили из системы — его чат и переписку нужно убрать локально. */
 export interface MemberRemovedPayload {
   userId: string;
+}
+
+/**
+ * Доступ устройства отозван или возвращён.
+ *
+ * В отличие от member.removed переписку не трогаем: отзыв обратим, и старые
+ * сообщения этого устройства расшифровываются его же ключами.
+ */
+export interface MemberRevokedPayload {
+  userId: string;
+  deviceId: string;
+  revoked: boolean;
 }
 
 export interface TypingPayload {

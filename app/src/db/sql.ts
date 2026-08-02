@@ -92,6 +92,15 @@ WHERE client_msg_id = ? AND (
               WHEN 'delivered' THEN 3 WHEN 'read' THEN 4 ELSE 0 END
 ) < ?`;
 
+/**
+ * Отметка «доступ устройства отозван» — и снятие её обратно.
+ *
+ * Именно UPDATE, а не удаление записи: переписка и открытые ключи участника
+ * должны остаться (отзыв обратим, а его прежние сообщения расшифровываются
+ * этими же ключами).
+ */
+export const UPDATE_CONTACT_REVOKED = "UPDATE contacts SET is_revoked = ? WHERE user_id = ?";
+
 /** Непрочитанные входящие конкретного чата: их id нужны для квитанций. */
 export const SELECT_CHAT_UNREAD = `
 SELECT id FROM messages

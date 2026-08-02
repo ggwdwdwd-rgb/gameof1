@@ -413,6 +413,95 @@ alice.send("member.remove", { userId: "нет-такого" });
 const noUser = await alice.wait("error", (m) => m.payload.code === "NO_SUCH_USER");
 check("несуществующего участника удалить нельзя", noUser.payload.code === "NO_SUCH_USER");
 
+// ── 11c. Отзыв доступа устройства — потерянный телефон ──────────────────────
+// Мера мягче удаления и обратимая: человек и переписка остаются, отключается
+// только устройство. Права те же, что на удаление.
+bob2.send("device.revoke", { deviceId: alice.deviceId, revoked: true });
+const revokeNotAdmin = await bob2.wait("error", (m) => m.payload.code === "NOT_ADMIN");
+check("не админ не может отозвать доступ", revokeNotAdmin.payload.code === "NOT_ADMIN");
+
+alice.send("device.revoke", { deviceId: alice.deviceId, revoked: true });
+const revokeSelf = await alice.wait("error", (m) => m.payload.code === "CANNOT_REVOKE_SELF");
+check("своё устройство отозвать нельзя", revokeSelf.payload.code === "CANNOT_REVOKE_SELF");
+
+alice.send("device.revoke", { deviceId: "нет-такого", revoked: true });
+const noDevice = await alice.wait("error", (m) => m.payload.code === "NO_SUCH_DEVICE");
+check("несуществующее устройство отозвать нельзя", noDevice.payload.code === "NO_SUCH_DEVICE");
+
+alice.send("device.revoke", { deviceId: bob.deviceId, revoked: true });
+const revoked = await alice.wait("member.revoked", (m) => m.payload.deviceId === bob.deviceId);
+check("админ отзывает доступ, остальные получают member.revoked", revoked.payload.revoked === true);
+check("в member.revoked есть участник", revoked.payload.userId === bob.userId, revoked.payload.userId);
+
+// Соединение отозванного рвётся сразу: иначе оно продолжало бы получать
+// сообщения до своего переподключения — а от этого отзыв и защищает.
+await new Promise((r) => setTimeout(r, 400));
+check(
+  "соединение отозванного устройства разорвано",
+  bob2.ws.readyState !== bob2.ws.OPEN,
+  `readyState=${bob2.ws.readyState}`,
+);
+
+alice.send("device.revoke", { deviceId: bob.deviceId, revoked: true });
+const alreadyRevoked = await alice.wait("error", (m) => m.payload.code === "ALREADY_IN_STATE");
+check("повторный отзыв отклоняется", alreadyRevoked.payload.code === "ALREADY_IN_STATE");
+
+// Отозванное устройство больше не входит — но именно с кодом REVOKED, а не
+// UNKNOWN_DEVICE: приложению это разные сообщения для человека.
+const revokedLogin = new Client("Боб-отозванный");
+revokedLogin.deviceId = bob.deviceId;
+revokedLogin.identity = bob.identity;
+await revokedLogin.open();
+const revokedChallenge = await revokedLogin.wait("auth.challenge");
+revokedLogin.send("auth.response", {
+  deviceId: revokedLogin.deviceId,
+  signature: crypto.signDetached(revokedChallenge.payload.nonce, revokedLogin.identity.secretKey),
+});
+const revokedError = await revokedLogin.wait("auth.error");
+check("отозванное устройство получает REVOKED", revokedError.payload.code === "REVOKED", revokedError.payload.code);
+revokedLogin.ws.close();
+
+// Главное свойство: отозванное устройство остаётся в roster с признаком.
+// Клиент удаляет участников, которых в roster нет, вместе с перепиской — если
+// сервер скрывал бы отозванных, отзыв одного телефона стирал бы переписку с
+// этим человеком у всех остальных.
+const witnessCode = await (async () => {
+  alice.send("invite.create", {});
+  alice.received = alice.received.filter((m) => m.type !== "invite.created");
+  return (await alice.wait("invite.created")).payload.code;
+})();
+const witness = new Client("Свидетель");
+await witness.open();
+await witness.redeem(witnessCode);
+const witnessRoster = await witness.wait("roster.snapshot");
+const bobInRoster = witnessRoster.payload.members.find((m) => m.deviceId === bob.deviceId);
+check("отозванное устройство остаётся в roster", Boolean(bobInRoster));
+check("в roster у него признак revoked", bobInRoster?.revoked === true, JSON.stringify(bobInRoster?.revoked));
+check(
+  "у действующих устройств признак revoked снят",
+  witnessRoster.payload.members.filter((m) => m.deviceId !== bob.deviceId).every((m) => m.revoked === false),
+);
+check(
+  "ключи отозванного устройства сохраняются (иначе его сообщения не расшифровать)",
+  bobInRoster?.encryptionPublicKey === bob.encryption.publicKey,
+);
+witness.ws.close();
+
+// Отзыв обратим — иначе он был бы просто удалением с лишним шагом.
+alice.received = alice.received.filter((m) => m.type !== "member.revoked");
+alice.send("device.revoke", { deviceId: bob.deviceId, revoked: false });
+const restored = await alice.wait("member.revoked", (m) => m.payload.deviceId === bob.deviceId);
+check("доступ возвращается тем же пакетом", restored.payload.revoked === false);
+
+const bob3 = new Client("Боб");
+bob3.deviceId = bob.deviceId;
+bob3.identity = bob.identity;
+bob3.encryption = bob.encryption;
+bob3.userId = bob.userId;
+await bob3.open();
+await bob3.authenticate();
+check("после возврата доступа устройство снова входит", true);
+
 // Само удаление проверяем последним: после него Боба в системе нет.
 alice.send("member.remove", { userId: bob.userId });
 const memberRemoved = await alice.wait("member.removed", (m) => m.payload.userId === bob.userId);
@@ -421,7 +510,7 @@ check("админ удаляет участника, остальные полу
 // Соединение удалённого рвётся сразу: иначе он остался бы «на связи» и мог бы
 // отправлять сообщения, хотя устройства в базе уже нет.
 await new Promise((r) => setTimeout(r, 400));
-check("соединение удалённого участника разорвано", bob2.ws.readyState !== bob2.ws.OPEN, `readyState=${bob2.ws.readyState}`);
+check("соединение удалённого участника разорвано", bob3.ws.readyState !== bob3.ws.OPEN, `readyState=${bob3.ws.readyState}`);
 
 // Повторный вход тем же устройством теперь невозможен — записи нет.
 const ghost = new Client("Боб-призрак");
@@ -443,7 +532,7 @@ const unknown = await alice.wait("error", (m) => m.payload.code === "UNKNOWN_TYP
 check("неизвестный тип пакета не рвёт соединение", unknown.payload.code === "UNKNOWN_TYPE");
 
 alice.ws.close();
-bob2.ws.close();
+bob3.ws.close();
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\nИтог: ${results.length - failed.length}/${results.length} проверок пройдено`);

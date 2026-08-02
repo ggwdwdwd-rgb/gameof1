@@ -12,6 +12,8 @@ export interface RosterMember {
   online: boolean;
   /** Когда он был на связи последний раз; null — ни разу с момента появления поля. */
   lastSeenAt: number | null;
+  /** Доступ устройства отозван: писать ему нельзя, но контакт и переписку клиент сохраняет. */
+  revoked: boolean;
 }
 
 interface RosterRow {
@@ -22,22 +24,31 @@ interface RosterRow {
   identity_public_key: string;
   encryption_public_key: string;
   joined_at: number;
+  revoked_at: number | null;
 }
 
 /**
- * Полный список активных (не отозванных) участников семьи, кроме самого
- * запросившего устройства. Нужен клиенту, который переподключился и мог
- * пропустить member.joined, разосланный, пока он был офлайн (см. ARCHITECTURE.md §4.8).
+ * Полный список участников семьи, кроме самого запросившего устройства. Нужен
+ * клиенту, который переподключился и мог пропустить member.joined, разосланный,
+ * пока он был офлайн (см. ARCHITECTURE.md §4.8).
+ *
+ * Отозванные устройства тоже попадают в список — с признаком revoked. Раньше
+ * они отсюда исключались, и это стало опасным, когда клиент начал удалять
+ * контакты, отсутствующие в roster: отзыв одного устройства стирал переписку с
+ * этим человеком у всех остальных. Ключи отозванного устройства к тому же нужны,
+ * чтобы расшифровывать его прежние сообщения.
  */
 export function getRosterExcluding(deviceId: string): RosterMember[] {
   const rows = db
     .prepare(
       `SELECT u.id AS user_id, d.id AS device_id, u.display_name, u.last_seen_at,
-              d.identity_public_key, d.encryption_public_key, d.created_at AS joined_at
+              d.identity_public_key, d.encryption_public_key, d.created_at AS joined_at, d.revoked_at
        FROM devices d
        JOIN users u ON u.id = d.user_id
-       WHERE d.revoked_at IS NULL AND d.id != ?
-       ORDER BY d.created_at ASC`,
+       WHERE d.id != ?
+       -- Действующее устройство идёт последним: клиент хранит один контакт на
+       -- участника, и побеждает запись, пришедшая позже.
+       ORDER BY (d.revoked_at IS NULL) ASC, d.created_at ASC`,
     )
     .all(deviceId) as RosterRow[];
 
@@ -52,6 +63,7 @@ export function getRosterExcluding(deviceId: string): RosterMember[] {
     // соврал бы после перезапуска процесса.
     online: isUserOnline(r.user_id),
     lastSeenAt: r.last_seen_at,
+    revoked: r.revoked_at !== null,
   }));
 }
 

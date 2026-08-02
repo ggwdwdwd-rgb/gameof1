@@ -1,4 +1,5 @@
 import { getDb } from "./database";
+import { UPDATE_CONTACT_REVOKED } from "./sql";
 
 export interface Contact {
   userId: string;
@@ -100,7 +101,13 @@ export async function deleteContactWithChat(userId: string, chatId: string): Pro
   await db.runAsync("DELETE FROM contacts WHERE user_id = ?", [userId]);
 }
 
-export async function markContactRevoked(userId: string): Promise<void> {
+/**
+ * Отметка «доступ устройства отозван» — и снятие её обратно.
+ *
+ * Переписку при этом не удаляем: отзыв обратим, а прежние сообщения этого
+ * устройства расшифровываются его же ключами, которые лежат в этой же записи.
+ */
+export async function setContactRevoked(userId: string, revoked: boolean): Promise<void> {
   const db = await getDb();
-  await db.runAsync("UPDATE contacts SET is_revoked = 1 WHERE user_id = ?", [userId]);
+  await db.runAsync(UPDATE_CONTACT_REVOKED, [revoked ? 1 : 0, userId]);
 }

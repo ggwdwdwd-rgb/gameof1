@@ -14,6 +14,7 @@ import {
   SELECT_CHAT_UNREAD,
   SELECT_LAST_MESSAGES,
   SELECT_UNREAD_COUNTS,
+  UPDATE_CONTACT_REVOKED,
   UPDATE_STATUS_MONOTONIC,
 } from "../src/db/sql.ts";
 
@@ -166,6 +167,24 @@ check("повторный запуск миграции безопасен", !se
 
 // В базе, созданной с нуля, столбец есть сразу — миграции делать нечего.
 check("в новой базе local_name есть сразу", columnsOf(freshDb(), "contacts").includes("local_name"));
+
+// ── Отзыв доступа устройства ───────────────────────────────────────────────
+// Отзыв не должен ничего терять: ни своё название контакта, ни открытые ключи.
+// Без ключей прежние сообщения этого человека перестали бы расшифровываться, а
+// снятие отзыва не вернуло бы переписку.
+const revoke = legacy.prepare(UPDATE_CONTACT_REVOKED);
+legacy.prepare("UPDATE contacts SET local_name = 'Аня с работы' WHERE user_id = 'u1'").run();
+check("отзыв меняет ровно одну запись", revoke.run(1, "u1").changes === 1);
+const revokedRow = legacy.prepare("SELECT * FROM contacts WHERE user_id = 'u1'").get();
+check("признак отзыва записан", revokedRow.is_revoked === 1);
+check("своё название контакта сохранилось", revokedRow.local_name === "Аня с работы");
+check(
+  "открытые ключи сохранились",
+  revokedRow.identity_public_key === "ipk" && revokedRow.encryption_public_key === "epk",
+);
+revoke.run(0, "u1");
+check("отзыв снимается", legacy.prepare("SELECT is_revoked FROM contacts WHERE user_id = 'u1'").get().is_revoked === 0);
+check("отзыв неизвестного контакта ничего не меняет", revoke.run(1, "нет-такого").changes === 0);
 
 // ── Пустая база ────────────────────────────────────────────────────────────
 const empty = freshDb();

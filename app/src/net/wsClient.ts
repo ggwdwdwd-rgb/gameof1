@@ -14,6 +14,7 @@ import {
   type InviteRedeemOkPayload,
   type MemberJoinedPayload,
   type MemberRemovedPayload,
+  type MemberRevokedPayload,
   type MemberUpdatedPayload,
   type PresencePayload,
   type MsgAcceptedPayload,
@@ -61,6 +62,7 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   memberJoined: (payload: MemberJoinedPayload) => void;
   memberUpdated: (payload: MemberUpdatedPayload) => void;
   memberRemoved: (payload: MemberRemovedPayload) => void;
+  memberRevoked: (payload: MemberRevokedPayload) => void;
   presence: (payload: PresencePayload) => void;
   msgDeliver: (payload: MsgDeliverPayload) => void;
   msgAccepted: (payload: MsgAcceptedPayload) => void;
@@ -156,6 +158,16 @@ export class WsClient {
     return this.rawSend(this.ws, "member.remove", { userId });
   }
 
+  /**
+   * Отзыв и возврат доступа устройства (потерянный телефон). false, если пакет
+   * не ушёл. Мера обратимая и переписку не затрагивает — в отличие от удаления
+   * участника.
+   */
+  revokeDevice(deviceId: string, revoked: boolean): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "device.revoke", { deviceId, revoked });
+  }
+
   /** Смена своего отображаемого имени. false, если пакет не ушёл. */
   updateProfile(displayName: string): boolean {
     if (!this.ws) return false;
@@ -241,6 +253,9 @@ export class WsClient {
         return;
       case "member.removed":
         this.events.emit("memberRemoved", parsed.payload as MemberRemovedPayload);
+        return;
+      case "member.revoked":
+        this.events.emit("memberRevoked", parsed.payload as MemberRevokedPayload);
         return;
       case "presence":
         this.events.emit("presence", parsed.payload as PresencePayload);

@@ -82,6 +82,17 @@ export interface PresenceSetPayload {
   active: boolean;
 }
 
+/**
+ * Отзыв и возврат доступа устройства. Разрешено только главному участнику.
+ *
+ * Отдельно от удаления участника: потерянный телефон нужно отключить сейчас, а
+ * переписку и человека сохранить. Мера обратимая.
+ */
+export interface DeviceRevokePayload {
+  deviceId: string;
+  revoked: boolean;
+}
+
 /** Удаление участника из системы. Разрешено только первому зарегистрированному. */
 export interface MemberRemovePayload {
   userId: string;

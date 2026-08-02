@@ -417,19 +417,41 @@ export function ChatScreen({
         </View>
       )}
 
-      <Composer
-        // Отступ считает useKeyboard: при открытой клавиатуре системный инсет
-        // обнуляется, хотя место под навигацию всё ещё нужно, и строка ввода
-        // уезжала под клавиатуру.
-        bottomInset={keyboard.safeBottom}
-        onSendText={handleSendText}
-        onTyping={handleTyping}
-        onPickImage={handlePickImage}
-        onPickFile={handlePickFile}
-        onShareLocation={handleShareLocation}
-        onVoiceRecorded={handleVoiceRecorded}
-        onNotice={showToast}
-      />
+      {/* Отозванному устройству сообщения не доставляются, поэтому строку ввода
+          убираем совсем: иначе отправленное молча висело бы «отправлено» без
+          надежды дойти. Переписку при этом видно — отзыв обратим. */}
+      {contact?.isRevoked ? (
+        <View
+          style={[
+            styles.revokedBar,
+            {
+              backgroundColor: theme.colors.surface,
+              borderTopColor: theme.colors.divider,
+              paddingBottom: 14 + keyboard.safeBottom,
+            },
+          ]}
+        >
+          <Icon name="alert" size={19} color={theme.colors.danger} />
+          <Text style={[styles.revokedText, { color: theme.colors.textSecondary }]}>
+            Доступ устройства отозван — писать этому участнику нельзя. Переписка сохранена, доступ возвращается в
+            настройках.
+          </Text>
+        </View>
+      ) : (
+        <Composer
+          // Отступ считает useKeyboard: при открытой клавиатуре системный инсет
+          // обнуляется, хотя место под навигацию всё ещё нужно, и строка ввода
+          // уезжала под клавиатуру.
+          bottomInset={keyboard.safeBottom}
+          onSendText={handleSendText}
+          onTyping={handleTyping}
+          onPickImage={handlePickImage}
+          onPickFile={handlePickFile}
+          onShareLocation={handleShareLocation}
+          onVoiceRecorded={handleVoiceRecorded}
+          onNotice={showToast}
+        />
+      )}
 
       <Toast state={toast} onHide={hideToast} />
 
@@ -489,4 +511,13 @@ const styles = StyleSheet.create({
   replyBarAuthor: { fontSize: 12.5, fontWeight: "700" },
   replyBarPreview: { fontSize: 13, marginTop: 1 },
   replyBarClose: { paddingHorizontal: 4 },
+  revokedBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  revokedText: { flex: 1, fontSize: 13, lineHeight: 18 },
 });

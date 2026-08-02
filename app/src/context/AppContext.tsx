@@ -6,6 +6,7 @@ import {
   deleteContactWithChat,
   listContacts,
   setContactLocalName,
+  setContactRevoked,
   upsertContact,
   type Contact,
 } from "../db/contacts";
@@ -166,6 +167,8 @@ interface AppActions {
   setActiveChat: (chatId: string | null) => void;
   /** Удаление участника из системы — доступно только админу. */
   removeMember: (userId: string) => Promise<{ ok: true } | { ok: false; detail: string }>;
+  /** Отзыв и возврат доступа устройства (потерянный телефон) — только админу. */
+  revokeDevice: (userId: string, revoked: boolean) => Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Самопроверка отправки по шагам — см. runSelfTest. */
   selfTest: () => Promise<SelfTestStep[]>;
 }
@@ -197,7 +200,10 @@ function contactFromRoster(crypto: Crypto, member: RosterMemberPayload, previous
     identityPublicKey: member.identityPublicKey,
     encryptionPublicKey: member.encryptionPublicKey,
     fingerprint: crypto.computeFingerprint(member.identityPublicKey),
-    isRevoked: false,
+    // Поля может не быть: старый сервер его не присылает, а memberUpdated
+    // собирает member вручную. В обоих случаях прежнее значение важнее
+    // выдуманного false — иначе смена имени снимала бы отзыв.
+    isRevoked: member.revoked ?? previous?.isRevoked ?? false,
   };
 }
 
@@ -499,6 +505,35 @@ export function AppProvider({
         })();
       });
 
+      /**
+       * Доступ устройства отозвали (или вернули).
+       *
+       * Переписку, в отличие от удаления участника, не трогаем: мера обратимая,
+       * а старые сообщения расшифровываются ключами этого же устройства. Чат
+       * остаётся на месте — только помечается и запрещает отправку.
+       */
+      ws.events.on("memberRevoked", (payload) => {
+        void (async () => {
+          const existing = contactsRef.current.find((c) => c.userId === payload.userId);
+          if (!existing || existing.deviceId !== payload.deviceId) return;
+          await setContactRevoked(payload.userId, payload.revoked);
+          contactsRef.current = contactsRef.current.map((c) =>
+            c.userId === payload.userId ? { ...c, isRevoked: payload.revoked } : c,
+          );
+          setContacts(contactsRef.current);
+          // Отозванное устройство сервер отключает сразу, но пакет presence
+          // придёт своим порядком — не ждём его, гасим «в сети» здесь.
+          if (payload.revoked) {
+            setPresence((prev) => {
+              const next = new Map(prev);
+              const before = prev.get(payload.userId);
+              next.set(payload.userId, { online: false, lastSeenAt: before?.lastSeenAt ?? null });
+              return next;
+            });
+          }
+        })();
+      });
+
       ws.events.on("msgDeliver", (payload) => {
         void handleIncomingMessage(crypto, ws, identity, payload, chatEvents, {
           contacts: contactsRef.current,
@@ -703,7 +738,12 @@ export function AppProvider({
       const ws = wsRef.current;
       if (!crypto || !ws) return { ok: false, reason: "NOT_READY" };
 
-      const contactsByUserId = new Map(contactsRef.current.map((c) => [c.userId, c]));
+      // Отозванные устройства исключаем: сервер им всё равно не доставит, а
+      // отправка выглядела бы успешной. Экран чата строку ввода для них не
+      // показывает — это второй заслон, на случай гонки с отзывом.
+      const contactsByUserId = new Map(
+        contactsRef.current.filter((c) => !c.isRevoked).map((c) => [c.userId, c]),
+      );
       const encrypted = encryptForChat(crypto, identity, chatId, wireContent, contactsByUserId);
       if ("error" in encrypted) return { ok: false, reason: encrypted.error };
 
@@ -825,6 +865,52 @@ export function AppProvider({
           });
 
           if (!ws.removeMember(userId)) finish({ ok: false, detail: "пакет не удалось отправить" });
+        });
+      },
+      /**
+       * Отзыв доступа устройства.
+       *
+       * Адресуемся по участнику, а не по устройству: в приложении видно людей, а
+       * deviceId лежит в контакте. Ответом считаем member.revoked — сервер
+       * рассылает его всем, включая того, кто попросил.
+       */
+      async revokeDevice(userId, revoked) {
+        const contact = contactsRef.current.find((c) => c.userId === userId);
+        if (!contact) return { ok: false, detail: "участник не найден" };
+
+        const ws = wsRef.current;
+        if (!ws || !(await ws.waitUntilReady(WAIT_READY_MS))) {
+          return { ok: false, detail: "нет соединения с сервером" };
+        }
+
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (result: { ok: true } | { ok: false; detail: string }): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offRevoked();
+            offError();
+            resolve(result);
+          };
+
+          const timer = setTimeout(() => finish({ ok: false, detail: "сервер не ответил" }), 12_000);
+          const offRevoked = ws.events.on("memberRevoked", (payload) => {
+            if (payload.deviceId === contact.deviceId && payload.revoked === revoked) finish({ ok: true });
+          });
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") {
+              finish({ ok: false, detail: "сервер устарел — обновите его" });
+              return;
+            }
+            if (["NOT_ADMIN", "NO_SUCH_DEVICE", "CANNOT_REVOKE_SELF", "ALREADY_IN_STATE"].includes(payload.code)) {
+              finish({ ok: false, detail: payload.message });
+            }
+          });
+
+          if (!ws.revokeDevice(contact.deviceId, revoked)) {
+            finish({ ok: false, detail: "пакет не удалось отправить" });
+          }
         });
       },
       async setNotificationsEnabled(enabled) {

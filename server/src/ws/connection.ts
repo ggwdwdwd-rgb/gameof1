@@ -9,6 +9,7 @@ import { createInvite } from "../invites.js";
 import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from "./handlers/message.js";
 import { getRosterExcluding, touchLastSeen } from "./handlers/roster.js";
 import { updateDisplayName } from "./handlers/profile.js";
+import { findDevice, setDeviceRevoked } from "../devices.js";
 import { deviceIdsOf, isAdmin, removeUser, userExists, wouldLeaveNoAdmin } from "../users.js";
 import {
   broadcastToAllExcept,
@@ -30,6 +31,7 @@ import {
   type InviteRedeemPayload,
   type MsgAckPayload,
   type MsgDeletePayload,
+  type DeviceRevokePayload,
   type MemberRemovePayload,
   type MsgSendPayload,
   type PresenceSetPayload,
@@ -236,6 +238,40 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
         const online = isUserOnline(userId);
         const lastSeenAt = online ? null : touchLastSeen(userId);
         broadcastToAllExcept(deviceId, envelope("presence", { userId, online, lastSeenAt }));
+        return;
+      }
+
+      if (parsed.type === "device.revoke") {
+        const payload = parsed.payload as DeviceRevokePayload;
+        if (!isAdmin(userId)) {
+          send(socket, envelope("error", { code: "NOT_ADMIN", message: "Отзывать доступ может только главный участник" }));
+          return;
+        }
+        const device = findDevice(payload.deviceId);
+        if (!device) {
+          send(socket, envelope("error", { code: "NO_SUCH_DEVICE", message: "Такого устройства нет" }));
+          return;
+        }
+        // Своё устройство отзывать нельзя: главный лишил бы себя доступа, и
+        // вернуть право было бы нечем, кроме командной строки на сервере.
+        if (device.userId === userId) {
+          send(socket, envelope("error", { code: "CANNOT_REVOKE_SELF", message: "Своё устройство отозвать нельзя" }));
+          return;
+        }
+        if (!setDeviceRevoked(payload.deviceId, payload.revoked === true)) {
+          send(socket, envelope("error", { code: "ALREADY_IN_STATE", message: "Устройство уже в этом состоянии" }));
+          return;
+        }
+
+        broadcastToAllExcept(
+          null,
+          envelope("member.revoked", { userId: device.userId, deviceId: device.id, revoked: payload.revoked === true }),
+        );
+        // Соединение отозванного устройства рвём сразу: иначе оно продолжало бы
+        // получать сообщения до собственного переподключения — а именно от этого
+        // отзыв и должен защищать.
+        if (payload.revoked === true) closeDevices([device.id], "доступ устройства отозван");
+        log.warn({ deviceId: device.id, revoked: payload.revoked === true, by: userId }, "изменён доступ устройства");
         return;
       }
 

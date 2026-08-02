@@ -213,10 +213,10 @@ docker compose exec server node dist/cli/remove-user.js --user=ad4e6bf9-...
 «первый зарегистрированный». Посмотреть и назначить:
 
 ```bash
-docker compose exec server node dist/cli/set-admin.js                     # список с пометкой
-docker compose exec server node dist/cli/set-admin.js --user=<ID> --sole  # главный только он
-docker compose exec server node dist/cli/set-admin.js --user=<ID>         # добавить ещё одного
-docker compose exec server node dist/cli/set-admin.js --user=<ID> --revoke
+docker compose exec server node dist/cli/set-admin.js                              # список с пометкой
+docker compose exec server node dist/cli/set-admin.js --user=ad4e6bf9-... --sole   # главный только он
+docker compose exec server node dist/cli/set-admin.js --user=ad4e6bf9-...          # добавить ещё одного
+docker compose exec server node dist/cli/set-admin.js --user=ad4e6bf9-... --revoke
 ```
 
 Сначала право было неявным — им обладал первый зарегистрированный участник. Это
@@ -249,7 +249,9 @@ workflow `.github/workflows/server.yml`: **Actions → «Сервер» → Run 
 выбрать действие. Работает с телефона, из обычного браузера.
 
 Действия: `update` (git pull + пересборка), `status`, `users` (список участников
-с их id), `remove-user` и `set-admin` (нужен `user_id`), `logs`, `invite`.
+с их id), `remove-user` и `set-admin` (нужен `user_id`), `devices` (список
+устройств), `revoke-device` и `restore-device` (нужен `device_id`, см. §8c),
+`logs`, `invite`.
 
 Один раз положить в **Settings → Secrets and variables → Actions**:
 
@@ -269,6 +271,36 @@ workflow `.github/workflows/server.yml`: **Actions → «Сервер» → Run 
 Пароль root в секретах GitHub — осознанный компромисс: секреты шифруются и в
 логах маскируются, но отозвать такой доступ можно только сменив пароль на
 сервере. Если это смущает — сразу заводи отдельного пользователя с SSH-ключом.
+
+## 8c. Потерянный телефон: отозвать доступ устройству
+
+Удалять участника в этом случае не надо: удаление уносит переписку с ним у всех
+и при возвращении делает его новым человеком. Отзыв отключает **одно устройство**,
+переписку и человека оставляет на месте и снимается обратно.
+
+```bash
+docker compose exec server node dist/cli/revoke-device.js                                 # список устройств
+docker compose exec server node dist/cli/revoke-device.js --device=66a6f281-...           # отозвать
+docker compose exec server node dist/cli/revoke-device.js --device=66a6f281-... --undo    # вернуть
+```
+
+id устройства — строка `device:` из списка, **без** угловых скобок.
+
+Что происходит: устройство сразу теряет соединение, больше не проходит вход и не
+получает сообщения. Переписка с этим человеком у всех остальных остаётся, а сам
+контакт помечается «доступ устройства отозван» — чат открывается только на
+чтение.
+
+Чего это не даёт: если ключи с телефона пропали (переустановка, сброс), то и
+после `--undo` этим устройством уже не войти — секретные ключи хранятся только на
+нём. Тогда человеку нужен новый код приглашения, и он станет новым участником;
+прежнего убирают через §8a.
+
+То же самое умеет приложение: настройки → участник → «Отозвать доступ
+устройству», но только у главного. Команда — на случай, когда в приложение не
+зайти (например, потерян как раз твой телефон, а войти надо с чужого). После
+правки базы снаружи остальные узнают об изменении при следующем подключении —
+достаточно свернуть и открыть Cry заново.
 
 ## 9. Обновление сервера после изменений в коде
 

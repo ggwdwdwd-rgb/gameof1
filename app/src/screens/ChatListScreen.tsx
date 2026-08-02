@@ -24,6 +24,8 @@ interface ChatRow {
   unread: number;
   /** Статус последнего сообщения, если оно наше: галочки рисуются в превью. */
   outgoingStatus: LocalMessage["status"] | null;
+  /** Доступ устройства отозван: чат только для чтения, помечается в списке. */
+  revoked: boolean;
 }
 
 const MEDIA_PREVIEWS: Record<string, { label: string; icon: IconName }> = {
@@ -94,9 +96,17 @@ const ChatRowView = React.memo(function ChatRowView({
 
       <View style={styles.rowText}>
         <View style={styles.rowTopLine}>
-          <Text style={[styles.rowTitle, { color: theme.colors.textPrimary }]} numberOfLines={1}>
-            {row.title}
-          </Text>
+          <View style={styles.rowTitleWrap}>
+            <Text
+              style={[styles.rowTitle, { color: row.revoked ? theme.colors.textSecondary : theme.colors.textPrimary }]}
+              numberOfLines={1}
+            >
+              {row.title}
+            </Text>
+            {/* Отзыв доступа виден прямо в списке: иначе «почему ему не доходит»
+                выяснялось бы только внутри чата. */}
+            {row.revoked && <Icon name="alert" size={15} color={theme.colors.danger} />}
+          </View>
           <Text style={[styles.rowStamp, { color: theme.colors.textMuted }]}>{formatStamp(row.ts)}</Text>
         </View>
 
@@ -165,24 +175,26 @@ export function ChatListScreen({
     // участниках это было двадцать обращений к sqlite на каждое событие.
     const [lastMessages, unreadCounts] = await Promise.all([listLastMessages(), listUnreadCounts(identity.userId)]);
 
-    const contactRows = contacts
-      .filter((c) => !c.isRevoked)
-      .map((contact) => {
-        const chatId = dmChatId(identity.userId, contact.userId);
-        const last = lastMessages.get(chatId) ?? null;
-        const preview = previewOf(last);
-        return {
-          chatId,
-          userId: contact.userId,
-          title: contactTitle(contact),
-          online: presence.get(contact.userId)?.online === true,
-          preview: preview.text,
-          previewIcon: preview.icon,
-          ts: last?.createdAt ?? 0,
-          unread: unreadCounts.get(chatId) ?? 0,
-          outgoingStatus: last && last.fromUserId === identity.userId && !last.deletedAt ? last.status : null,
-        };
-      });
+    // Отозванные не пропадают из списка: переписка с ними цела и читается, а
+    // исчезнувший чат выглядел бы как потерянная история. Писать в него нельзя —
+    // это видно по метке и по отсутствию строки ввода в самом чате.
+    const contactRows = contacts.map((contact) => {
+      const chatId = dmChatId(identity.userId, contact.userId);
+      const last = lastMessages.get(chatId) ?? null;
+      const preview = previewOf(last);
+      return {
+        chatId,
+        userId: contact.userId,
+        title: contactTitle(contact),
+        online: !contact.isRevoked && presence.get(contact.userId)?.online === true,
+        preview: preview.text,
+        previewIcon: preview.icon,
+        ts: last?.createdAt ?? 0,
+        unread: unreadCounts.get(chatId) ?? 0,
+        outgoingStatus: last && last.fromUserId === identity.userId && !last.deletedAt ? last.status : null,
+        revoked: contact.isRevoked,
+      };
+    });
     setRows(contactRows.sort((a, b) => b.ts - a.ts));
   }, [contacts, identity.userId, presence]);
 
@@ -316,6 +328,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10 },
   rowText: { flex: 1, marginLeft: 14 },
   rowTopLine: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 },
+  rowTitleWrap: { flex: 1, flexDirection: "row", alignItems: "center", gap: 5 },
   rowTitle: { fontSize: 16.5, fontWeight: "600", flexShrink: 1, letterSpacing: -0.2 },
   rowStamp: { fontSize: 12 },
   rowBottomLine: { flexDirection: "row", alignItems: "center", marginTop: 3 },

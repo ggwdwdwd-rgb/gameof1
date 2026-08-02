@@ -74,6 +74,7 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
     selfTest,
     isAdmin,
     removeMember,
+    revokeDevice,
     backgroundEnabled,
     backgroundAvailable,
     setBackgroundEnabled,
@@ -83,6 +84,13 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
   const { preference, setPreference } = useThemePreference();
   const failureText = connectionState === "connected" ? "" : describeFailure(connectionFailure);
   const activeContacts = contacts.filter((c) => !c.isRevoked);
+  // Отозванных показываем в конце списка, а не скрываем: иначе снять отзыв было
+  // бы нечем, кроме командной строки на сервере, а сам факт отзыва выглядел бы
+  // как «человек пропал».
+  const listedContacts = useMemo(
+    () => [...contacts].sort((a, b) => Number(a.isRevoked) - Number(b.isRevoked)),
+    [contacts],
+  );
   const connected = connectionState === "connected";
 
   const [editingName, setEditingName] = useState(false);
@@ -213,15 +221,69 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
     [removeMember],
   );
 
+  /**
+   * Отзыв доступа устройства: телефон потерян или украден.
+   *
+   * Мера обратимая и мягче удаления — переписка остаётся у всех, включая самого
+   * отозванного. Спрашиваем всё равно: человек мгновенно теряет связь.
+   */
+  const confirmRevoke = useCallback(
+    (contact: Contact) => {
+      if (contact.isRevoked) {
+        Alert.alert(
+          `Вернуть доступ ${contactTitle(contact)}?`,
+          "Устройство снова сможет подключаться и получать сообщения. Если ключи с телефона пропали (переустановка или сброс), вернуть доступ этим способом не получится — понадобится новый код приглашения.",
+          [
+            { text: "Отмена", style: "cancel" },
+            {
+              text: "Вернуть",
+              onPress: () => {
+                void (async () => {
+                  const result = await revokeDevice(contact.userId, false);
+                  if (!result.ok) Alert.alert("Доступ не возвращён", result.detail);
+                })();
+              },
+            },
+          ],
+        );
+        return;
+      }
+      Alert.alert(
+        `Отозвать доступ ${contactTitle(contact)}?`,
+        "Телефон этого участника сразу отключится от сервера и перестанет получать сообщения. Переписка у всех остаётся на месте, и доступ можно вернуть тем же способом.",
+        [
+          { text: "Отмена", style: "cancel" },
+          {
+            text: "Отозвать",
+            style: "destructive",
+            onPress: () => {
+              void (async () => {
+                const result = await revokeDevice(contact.userId, true);
+                if (!result.ok) Alert.alert("Доступ не отозван", result.detail);
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [revokeDevice],
+  );
+
   const memberActions = useMemo((): SheetAction[] => {
     const contact = menuFor;
     if (!contact) return [];
     const actions: SheetAction[] = [
       { label: "Переименовать у себя", icon: "edit", onPress: () => setRenaming(contact) },
     ];
-    // Кнопка только у админа: у остальных сервер всё равно откажет, и показывать
-    // её означало бы предлагать заведомо невозможное.
+    // Кнопки только у админа: у остальных сервер всё равно откажет, и показывать
+    // их означало бы предлагать заведомо невозможное.
     if (isAdmin) {
+      actions.push({
+        label: contact.isRevoked ? "Вернуть доступ устройству" : "Отозвать доступ устройству",
+        icon: contact.isRevoked ? "refresh" : "alert",
+        destructive: !contact.isRevoked,
+        onPress: () => confirmRevoke(contact),
+      });
       actions.push({
         label: "Удалить участника",
         icon: "trash",
@@ -230,7 +292,7 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
       });
     }
     return actions;
-  }, [menuFor, isAdmin, confirmRemove]);
+  }, [menuFor, isAdmin, confirmRemove, confirmRevoke]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -490,16 +552,18 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
 
         <SectionTitle>{`Участники · ${activeContacts.length}`}</SectionTitle>
         <Card>
-          {activeContacts.length === 0 ? (
+          {listedContacts.length === 0 ? (
             <View style={styles.block}>
               <Text style={[styles.hint, { color: theme.colors.textMuted, marginTop: 0 }]}>
                 Пока никого нет. Добавьте человека кнопкой «+» в списке чатов.
               </Text>
             </View>
           ) : (
-            activeContacts.map((contact, index) => {
-              const online = presence.get(contact.userId)?.online === true;
-              const status = describePresence(presence.get(contact.userId));
+            listedContacts.map((contact, index) => {
+              const online = !contact.isRevoked && presence.get(contact.userId)?.online === true;
+              const status = contact.isRevoked
+                ? "доступ устройства отозван"
+                : describePresence(presence.get(contact.userId));
               return (
                 <Pressable
                   key={contact.userId}
@@ -518,27 +582,41 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
                     ringColor={theme.colors.surface}
                   />
                   <View style={styles.memberText}>
-                    <Text style={[styles.memberName, { color: theme.colors.textPrimary }]}>
+                    <Text
+                      style={[
+                        styles.memberName,
+                        { color: contact.isRevoked ? theme.colors.textMuted : theme.colors.textPrimary },
+                      ]}
+                    >
                       {contactTitle(contact)}
                     </Text>
                     {/* Если название своё — показываем и настоящее имя, чтобы
                         человека можно было опознать. */}
-                    <Text style={[styles.memberFingerprint, { color: theme.colors.textMuted }]}>
+                    <Text
+                      style={[
+                        styles.memberFingerprint,
+                        { color: contact.isRevoked ? theme.colors.danger : theme.colors.textMuted },
+                      ]}
+                    >
                       {contact.localName !== null ? `${contact.displayName} · ` : ""}
                       {status !== "" ? status : contact.fingerprint}
                     </Text>
                   </View>
-                  <Icon name="edit" size={17} color={theme.colors.textMuted} />
+                  <Icon
+                    name={contact.isRevoked ? "alert" : "edit"}
+                    size={17}
+                    color={contact.isRevoked ? theme.colors.danger : theme.colors.textMuted}
+                  />
                 </Pressable>
               );
             })
           )}
         </Card>
 
-        {activeContacts.length > 0 && (
+        {listedContacts.length > 0 && (
           <Text style={[styles.hint, { color: theme.colors.textMuted, marginLeft: 6 }]}>
             {isAdmin
-              ? "Нажмите на участника, чтобы подписать его по-своему или удалить из мессенджера."
+              ? "Нажмите на участника, чтобы подписать его по-своему, отозвать доступ его устройству (потерянный телефон — отзыв обратим и переписку не трогает) или удалить его из мессенджера совсем."
               : "Нажмите на участника, чтобы подписать его по-своему — это название видно только на вашем устройстве."}
           </Text>
         )}

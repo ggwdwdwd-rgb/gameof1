@@ -88,15 +88,16 @@ export function connectedDeviceCount(): number {
 /**
  * Разрывает соединения перечисленных устройств.
  *
- * Нужно после удаления участника: его устройства из базы уже исчезли, но
- * открытый сокет продолжал бы работать до перезапуска — удалённый участник
- * оставался бы «на связи» и мог бы отправлять сообщения.
+ * Нужно после удаления участника и после отзыва устройства: запись из базы уже
+ * исчезла или помечена отозванной, но открытый сокет продолжал бы работать до
+ * перезапуска — отключённое устройство оставалось бы «на связи» и получало бы
+ * сообщения, а именно от этого отзыв и должен защищать.
  */
-export function closeDevices(deviceIds: string[]): void {
+export function closeDevices(deviceIds: string[], reason = "участник удалён"): void {
   for (const deviceId of deviceIds) {
     const conn = connections.get(deviceId);
     if (!conn) continue;
     connections.delete(deviceId);
-    conn.socket.close(4003, "участник удалён");
+    conn.socket.close(4003, reason);
   }
 }

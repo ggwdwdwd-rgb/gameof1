@@ -32,10 +32,17 @@ on:
           - users # список участников с их id
           - remove-user # удалить участника (нужен user_id)
           - set-admin # сделать участника главным (нужен user_id)
+          - devices # список устройств с их id и признаком отзыва
+          - revoke-device # отозвать доступ устройству (нужен device_id)
+          - restore-device # вернуть доступ устройству (нужен device_id)
           - logs # последние строки логов сервера
           - invite # выпустить новый код приглашения
       user_id:
         description: "id участника — для remove-user и set-admin (взять из действия users)"
+        required: false
+        type: string
+      device_id:
+        description: "id устройства — для revoke-device и restore-device (взять из действия devices)"
         required: false
         type: string
 
@@ -71,6 +78,12 @@ jobs:
             remove-user|set-admin)
               if [ -z "${{ inputs.user_id }}" ]; then
                 echo "::error::Для действия ${{ inputs.action }} нужно указать user_id. Сначала запусти действие users и скопируй id."
+                exit 1
+              fi
+              ;;
+            revoke-device|restore-device)
+              if [ -z "${{ inputs.device_id }}" ]; then
+                echo "::error::Для действия ${{ inputs.action }} нужно указать device_id. Сначала запусти действие devices и скопируй id."
                 exit 1
               fi
               ;;
@@ -120,6 +133,17 @@ jobs:
               # --sole: право остаётся только у указанного участника. Именно это
               # имеют в виду, когда говорят «сделай главным меня».
               REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/set-admin.js --user='${{ inputs.user_id }}' --sole"
+              ;;
+            devices)
+              REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/revoke-device.js"
+              ;;
+            revoke-device)
+              # Потерянный телефон: отключаем одно устройство, участника и
+              # переписку оставляем. Обратимо действием restore-device.
+              REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/revoke-device.js --device='${{ inputs.device_id }}'"
+              ;;
+            restore-device)
+              REMOTE="cd $PROJECT_DIR && docker compose exec -T server node dist/cli/revoke-device.js --device='${{ inputs.device_id }}' --undo"
               ;;
             logs)
               REMOTE="cd $PROJECT_DIR && docker compose logs --tail=120 server"
