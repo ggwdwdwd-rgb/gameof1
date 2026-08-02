@@ -73,6 +73,13 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   errorPacket: (payload: ErrorPayload) => void;
 }
 
+/**
+ * Сколько сообщений просим одной страницей истории. Полная страница означает
+ * «на сервере есть ещё» — по этому признаку клиент запрашивает продолжение
+ * (см. обработчик historyPage).
+ */
+export const HISTORY_PAGE_LIMIT = 200;
+
 const PING_INTERVAL_MS = 30_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const TYPING_THROTTLE_MS = 2_000;
@@ -197,7 +204,7 @@ export class WsClient {
   }
 
   fetchHistory(chatId: string, sinceTs: number): void {
-    if (this.ws) this.rawSend(this.ws, "history.fetch", { chatId, sinceTs, limit: 200 });
+    if (this.ws) this.rawSend(this.ws, "history.fetch", { chatId, sinceTs, limit: HISTORY_PAGE_LIMIT });
   }
 
   deleteMessage(msgId: string, chatId: string): void {

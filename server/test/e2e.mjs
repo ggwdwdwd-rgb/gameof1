@@ -356,6 +356,54 @@ check(
     text,
 );
 
+// ── 10a. История длиннее одной страницы ─────────────────────────────────────
+// Клиент просит по 200 сообщений и, получив полную страницу, запрашивает
+// продолжение от времени последнего сообщения. Здесь проверяется контракт, на
+// который он при этом опирается: страница не длиннее лимита, отдаётся по
+// возрастанию времени, а следующий запрос от последнего ts выдаёт остаток без
+// повторов и без пропусков.
+const PAGE = 200;
+const EXTRA = 12;
+for (let i = 0; i < PAGE + EXTRA; i += 1) {
+  const bulk = crypto.boxEncrypt(`массовое ${i}`, alicePeerKey, alice.encryption.secretKey);
+  alice.send("msg.send", {
+    clientMsgId: randomUUID(),
+    chatId,
+    contentType: "text",
+    ciphertext: bulk.ciphertext,
+    nonce: bulk.nonce,
+    replyTo: null,
+  });
+}
+// Ждём подтверждения последнего: пока сервер не записал всё, история неполна.
+await new Promise((r) => setTimeout(r, 1200));
+
+bob2.received = bob2.received.filter((m) => m.type !== "history.page");
+bob2.send("history.fetch", { chatId, sinceTs: 0, limit: PAGE });
+const firstPage = await bob2.wait("history.page");
+check("страница истории не длиннее запрошенного лимита", firstPage.payload.messages.length === PAGE, String(firstPage.payload.messages.length));
+check(
+  "страница отдаётся по возрастанию времени",
+  firstPage.payload.messages.every((m, i) => i === 0 || m.ts >= firstPage.payload.messages[i - 1].ts),
+);
+
+const lastTs = firstPage.payload.messages.at(-1).ts;
+bob2.received = bob2.received.filter((m) => m.type !== "history.page");
+bob2.send("history.fetch", { chatId, sinceTs: lastTs, limit: PAGE });
+const secondPage = await bob2.wait("history.page");
+check("продолжение истории приходит", secondPage.payload.messages.length > 0, String(secondPage.payload.messages.length));
+check("продолжение строго новее курсора", secondPage.payload.messages.every((m) => m.ts > lastTs));
+const firstIds = new Set(firstPage.payload.messages.map((m) => m.msgId));
+check(
+  "страницы не пересекаются",
+  secondPage.payload.messages.every((m) => !firstIds.has(m.msgId)),
+);
+check(
+  "вместе страницы покрывают всю переписку",
+  firstPage.payload.messages.length + secondPage.payload.messages.length >= PAGE + EXTRA,
+  `${firstPage.payload.messages.length} + ${secondPage.payload.messages.length}`,
+);
+
 // ── 11. Удаление у всех — только автором ────────────────────────────────────
 bob2.send("msg.delete", { msgId: clientMsgId, chatId });
 const notOwner = await bob2.wait("error", (m) => m.payload.code === "NOT_OWNER");

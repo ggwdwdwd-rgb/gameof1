@@ -1,6 +1,7 @@
 import { getDb } from "./database";
 import {
   MARK_CHAT_READ,
+  SELECT_CHAT_MESSAGES,
   SELECT_CHAT_UNREAD,
   SELECT_LAST_MESSAGES,
   SELECT_UNREAD_COUNTS,
@@ -115,12 +116,10 @@ export async function countMessages(): Promise<number> {
   return row?.n ?? 0;
 }
 
+/** Последние `limit` сообщений чата, по возрастанию времени — см. SELECT_CHAT_MESSAGES. */
 export async function listMessagesForChat(chatId: string, limit = 200): Promise<LocalMessage[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<MessageRow>(
-    "SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at ASC LIMIT ?",
-    [chatId, limit],
-  );
+  const rows = await db.getAllAsync<MessageRow>(SELECT_CHAT_MESSAGES, [chatId, limit]);
   return rows.map(fromRow);
 }
 

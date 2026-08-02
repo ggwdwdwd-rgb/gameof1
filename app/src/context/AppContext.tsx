@@ -36,7 +36,7 @@ import { dmChatId } from "../chat/chatId";
 import { isBiometricsSupported } from "../lock/biometrics";
 import { isAppLocked } from "../lock/lockState";
 import { saveIncomingEnvelope, type LocalMediaMeta } from "../chat/media";
-import { WsClient, type ConnectionFailure, type ConnectionState } from "../net/wsClient";
+import { HISTORY_PAGE_LIMIT, WsClient, type ConnectionFailure, type ConnectionState } from "../net/wsClient";
 import type { InviteCreatedPayload, MsgDeliverPayload, RosterMemberPayload } from "../net/protocol";
 import { saveIdentity } from "../storage/identity";
 import type { DeviceIdentity } from "../storage/identity";
@@ -646,7 +646,27 @@ export function AppProvider({
             }
           }
           if (inserted > 0) chatEvents.emit("messageInserted", payload.chatId);
-          if (maxTs > 0) await setLastSyncedTs(payload.chatId, maxTs);
+          if (maxTs === 0) return;
+
+          const previous = await getLastSyncedTs(payload.chatId);
+          await setLastSyncedTs(payload.chatId, maxTs);
+
+          /**
+           * Полная страница означает, что на сервере есть ещё — просим следующую
+           * сразу.
+           *
+           * Раньше страница приходила одна: после долгого офлайна доезжало 200
+           * сообщений, а остальные ждали следующего переподключения, которого при
+           * живом соединении может не быть часами. nextCursor сервер не отдаёт,
+           * поэтому курсор — время последнего сообщения страницы.
+           *
+           * Условие maxTs > previous обязательно: без него страница, целиком
+           * состоящая из сообщений с одинаковым временем, запрашивалась бы по
+           * кругу вечно (сервер отдаёт строго новее курсора).
+           */
+          if (payload.messages.length >= HISTORY_PAGE_LIMIT && maxTs > previous) {
+            ws.fetchHistory(payload.chatId, maxTs);
+          }
         })();
       });
 

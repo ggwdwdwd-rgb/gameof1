@@ -11,6 +11,7 @@ import {
   MARK_CHAT_READ,
   REQUIRED_COLUMNS,
   SCHEMA,
+  SELECT_CHAT_MESSAGES,
   SELECT_CHAT_UNREAD,
   SELECT_LAST_MESSAGES,
   SELECT_UNREAD_COUNTS,
@@ -109,6 +110,57 @@ check("очередь квитанций не дублирует сообщен�
 check("повторная запись обновляет статус", pending[0].status === "read", pending[0].status);
 db.prepare("DELETE FROM pending_acks WHERE msg_id = ?").run("in1");
 check("отправленная квитанция убирается из очереди", db.prepare("SELECT COUNT(*) AS n FROM pending_acks").get().n === 1);
+
+// ── Экран чата показывает последние сообщения, а не первые ─────────────────
+// Ровно этой проверки не хватало. В запросе стояло `ORDER BY created_at ASC
+// LIMIT ?`, то есть выбирались самые СТАРЫЕ сообщения. Пока переписка была
+// короче лимита, всё выглядело правильно; стоило ей подрасти — окно заняли
+// старые сообщения, и новые перестали появляться в чате навсегда. Со стороны:
+// «сообщения не идут», хотя они и в базе, и у собеседника.
+const paging = freshDb();
+const pagingInsert = paging.prepare(
+  `INSERT INTO messages (id, client_msg_id, chat_id, from_user_id, content_type, plaintext, reply_to, status, created_at, deleted_at)
+   VALUES (?, ?, ?, ?, 'text', ?, NULL, 'sent', ?, NULL)`,
+);
+const LONG_CHAT = "dm:a:me";
+// 250 сообщений в чате при лимите 200 — как у живой переписки.
+for (let i = 1; i <= 250; i += 1) {
+  pagingInsert.run(`p${i}`, `p${i}`, LONG_CHAT, ME, `текст ${i}`, 1000 + i);
+}
+// Плюс чужой чат: запрос не должен его захватывать.
+pagingInsert.run("other", "other", "dm:b:me", ME, "чужое", 9_999_999);
+
+const page = paging.prepare(SELECT_CHAT_MESSAGES).all(LONG_CHAT, 200);
+check("возвращается ровно лимит сообщений", page.length === 200, String(page.length));
+check("самое новое сообщение попало в выборку", page.at(-1)?.id === "p250", String(page.at(-1)?.id));
+check("окно взято с конца переписки, а не с начала", page[0]?.id === "p51", String(page[0]?.id));
+check(
+  "порядок по возрастанию времени (список рисуется снизу вверх)",
+  page.every((row, i) => i === 0 || row.created_at >= page[i - 1].created_at),
+);
+check("чужой чат не попадает", page.every((row) => row.chat_id === LONG_CHAT));
+
+// Свежая вставка обязана находиться сразу — это и проверяет самопроверка в
+// приложении шагом «Локальная база пишется».
+pagingInsert.run("probe", "probe", LONG_CHAT, ME, "самопроверка", Date.now());
+check(
+  "только что вставленное сообщение сразу видно",
+  paging.prepare(SELECT_CHAT_MESSAGES).all(LONG_CHAT, 200).some((row) => row.id === "probe"),
+);
+
+// Короткая переписка не должна пострадать от вложенного запроса.
+const shortChat = freshDb();
+const shortInsert = shortChat.prepare(
+  `INSERT INTO messages (id, client_msg_id, chat_id, from_user_id, content_type, plaintext, reply_to, status, created_at, deleted_at)
+   VALUES (?, ?, ?, ?, 'text', ?, NULL, 'sent', ?, NULL)`,
+);
+for (let i = 1; i <= 3; i += 1) shortInsert.run(`s${i}`, `s${i}`, LONG_CHAT, ME, `текст ${i}`, 1000 + i);
+const shortPage = shortChat.prepare(SELECT_CHAT_MESSAGES).all(LONG_CHAT, 200);
+check(
+  "короткая переписка отдаётся целиком и по порядку",
+  shortPage.map((row) => row.id).join(",") === "s1,s2,s3",
+  shortPage.map((row) => row.id).join(","),
+);
 
 // ── Обновление старой базы ─────────────────────────────────────────────────
 // Именно этого теста и не хватало: столбец local_name я добавил в CREATE TABLE

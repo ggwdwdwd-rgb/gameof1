@@ -101,6 +101,25 @@ WHERE client_msg_id = ? AND (
  */
 export const UPDATE_CONTACT_REVOKED = "UPDATE contacts SET is_revoked = ? WHERE user_id = ?";
 
+/**
+ * Сообщения чата для показа на экране: последние `limit`, снизу вверх.
+ *
+ * Вложенный запрос обязателен. Раньше здесь было просто
+ * `ORDER BY created_at ASC LIMIT ?` — то есть выбирались САМЫЕ СТАРЫЕ 200
+ * сообщений. Пока переписка была короче двухсот, разницы не было; как только
+ * она подросла, окно навсегда заняли старые сообщения, и новые — и свои, и
+ * входящие — перестали появляться в чате вовсе. Снаружи это выглядело как
+ * «сообщения не идут»: они писались в базу, доходили до собеседника, но на
+ * экране не показывались.
+ *
+ * Поэтому сначала берём хвост (DESC + LIMIT), а потом разворачиваем обратно —
+ * список рисуется по возрастанию времени.
+ */
+export const SELECT_CHAT_MESSAGES = `
+SELECT * FROM (
+  SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?
+) ORDER BY created_at ASC`;
+
 /** Непрочитанные входящие конкретного чата: их id нужны для квитанций. */
 export const SELECT_CHAT_UNREAD = `
 SELECT id FROM messages
