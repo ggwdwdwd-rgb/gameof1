@@ -13,6 +13,7 @@ import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
 import { RenameModal } from "../ui/RenameModal";
 import { describePresence } from "../ui/presence";
+import { buildLabel } from "../util/buildInfo";
 import { getPermissionState, requestPermission, showTest } from "../notify/notifications";
 import type { SelfTestStep } from "../context/AppContext";
 
@@ -494,6 +495,10 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
         <SectionTitle>Диагностика</SectionTitle>
         <Card>
           <View style={styles.block}>
+            {/* Версия сборки: APK раздаётся файлом, и «обновился ли человек»
+                иначе не выяснить. nativeBuildVersion — это versionCode, он
+                растёт с каждой сборкой (autoIncrement в eas.json). */}
+            <DiagRow label="Версия" value={buildLabel} theme={theme} />
             <DiagRow label="Соединение" value={connectionState} theme={theme} />
             <DiagRow label="Участников известно" value={String(activeContacts.length)} theme={theme} />
             <DiagRow label="Сообщений в базе" value={diag ? String(diag.messages) : "…"} theme={theme} />

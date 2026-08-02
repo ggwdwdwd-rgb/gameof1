@@ -27,8 +27,9 @@ npx eas login                                   # аккаунт Expo (бесп�
 npx eas build --profile development --platform android
 ```
 
-Соберётся APK с dev-client — установи его на телефон (см. docs/BUILD.md для
-подробностей про Play Protect на чистом устройстве). После установки:
+Соберётся APK с dev-client — установи его на телефон (docs/BUILD.md §5 — про
+Play Protect и установку из неизвестных источников на чистом устройстве). После
+установки:
 
 ```bash
 npx expo start --dev-client
@@ -39,6 +40,9 @@ npx expo start --dev-client
 Если EAS недоступен и на компьютере есть Android Studio/SDK — тот же
 результат даёт `npx expo run:android` (соберёт и поставит dev-client
 локально через gradlew, без облака).
+
+Релизный APK, который раздаётся людям, — отдельная тема: `docs/BUILD.md`.
+Там же про ключ подписи, потеря которого стоит всем участникам переписки.
 
 ## .env
 

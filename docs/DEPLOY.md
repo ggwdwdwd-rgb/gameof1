@@ -320,5 +320,6 @@ cp data/server.db data/server.db.bak-$(date +%Y%m%d)
 
 ## Если EAS/Expo вообще недоступен и нужен локальный билд APK
 
-Это не относится к серверу — см. `docs/BUILD.md` (появится в Этапе 6), там
-описаны оба пути: `eas build` и локальный `gradlew assembleRelease`.
+Это не относится к серверу — см. `docs/BUILD.md`, там описаны оба пути:
+`eas build` (в том числе с флагом `--local`) и `prebuild` + `gradlew
+assembleRelease`.
