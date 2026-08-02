@@ -32,6 +32,16 @@ export interface SodiumLike {
 
   crypto_generichash(hashLength: number, message: Uint8Array): Uint8Array;
 
+  /** Argon2id — для хэша PIN-кода блокировки (см. pin.ts). */
+  crypto_pwhash(
+    keyLength: number,
+    password: Uint8Array,
+    salt: Uint8Array,
+    opsLimit: number,
+    memLimit: number,
+    algorithm: number,
+  ): Uint8Array;
+
   randombytes_buf(length: number): Uint8Array;
 
   to_base64(input: Uint8Array): string;
@@ -39,4 +49,9 @@ export interface SodiumLike {
 
   readonly crypto_box_NONCEBYTES: number;
   readonly crypto_box_SECRETKEYBYTES: number;
+
+  readonly crypto_pwhash_SALTBYTES: number;
+  readonly crypto_pwhash_OPSLIMIT_INTERACTIVE: number;
+  readonly crypto_pwhash_MEMLIMIT_INTERACTIVE: number;
+  readonly crypto_pwhash_ALG_ARGON2ID13: number;
 }

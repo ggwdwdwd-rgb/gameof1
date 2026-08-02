@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Animated, Easing, Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { formatFileSize, parseLocalMediaMeta } from "../chat/media";
 import type { LocalMessage } from "../db/messages";
+import { withSystemPicker } from "../lock/systemPicker";
 import type { Theme } from "../theme/theme";
 import { Icon, type IconName } from "./Icon";
 import { LinkedText } from "./LinkedText";
@@ -308,7 +309,9 @@ function MessageContent({
 
 async function shareFile(uri: string): Promise<void> {
   try {
-    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri);
+    // withSystemPicker: системное окно «поделиться» уводит приложение в фон, и
+    // блокировка не должна принимать это за уход человека.
+    if (await Sharing.isAvailableAsync()) await withSystemPicker(() => Sharing.shareAsync(uri));
   } catch {
     // Нечем открыть — молча ничего не делаем, ронять чат из-за этого незачем.
   }

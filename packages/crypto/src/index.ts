@@ -3,6 +3,7 @@
 import { boxEncrypt, boxOpen } from "./channel";
 import { computeFingerprint } from "./fingerprint";
 import { generateEncryptionKeyPair, generateIdentityKeyPair } from "./keys";
+import { generatePinSalt, hashPin, verifyPin } from "./pin";
 import type { SodiumLike } from "./sodium";
 import { signDetached, verifyDetached } from "./signing";
 
@@ -28,6 +29,10 @@ export function createCrypto(sodium: SodiumLike) {
     boxOpen: (payload: { ciphertext: string; nonce: string }, theirPublicKeyB64: string, mySecretKeyB64: string) =>
       boxOpen(sodium, payload, theirPublicKeyB64, mySecretKeyB64),
     computeFingerprint: (identityPublicKeyB64: string) => computeFingerprint(sodium, identityPublicKeyB64),
+    /** Соль для PIN-кода блокировки: своя на устройство, хранится рядом с хэшем. */
+    generatePinSalt: () => generatePinSalt(sodium),
+    hashPin: (pin: string, saltB64: string) => hashPin(sodium, pin, saltB64),
+    verifyPin: (pin: string, saltB64: string, hashB64: string) => verifyPin(sodium, pin, saltB64, hashB64),
   };
 }
 

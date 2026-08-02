@@ -27,6 +27,7 @@ const REQUIRED = [
   // означает, что уведомления снова приходят только при открытом приложении.
   { permission: "android.permission.FOREGROUND_SERVICE", why: "работа в фоне" },
   { permission: "android.permission.FOREGROUND_SERVICE_SPECIAL_USE", why: "тип службы переднего плана" },
+  { permission: "android.permission.USE_BIOMETRIC", why: "разблокировка отпечатком или лицом" },
 ];
 
 let failed = 0;

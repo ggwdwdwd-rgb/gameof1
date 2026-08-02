@@ -13,9 +13,24 @@ import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
 import { RenameModal } from "../ui/RenameModal";
 import { describePresence } from "../ui/presence";
+import { PinSetupModal } from "../ui/PinSetupModal";
+import { getCrypto } from "../crypto/sodium";
+import { clearLockConfig, loadLockConfig, saveLockConfig, type LockConfig } from "../storage/lock";
 import { buildLabel } from "../util/buildInfo";
 import { getPermissionState, requestPermission, showTest } from "../notify/notifications";
 import type { SelfTestStep } from "../context/AppContext";
+
+/**
+ * Через сколько после сворачивания снова спрашивать код.
+ *
+ * «Сразу» не означает «после каждого выбора фото»: системные окна приложение
+ * отмечает отдельно и уходом человека не считает (см. lock/systemPicker).
+ */
+const GRACE_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "Сразу" },
+  { value: 60, label: "Через минуту" },
+  { value: 300, label: "Через 5 минут" },
+];
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: IconName }[] = [
   { value: "light", label: "Светлая", icon: "sun" },
@@ -58,7 +73,14 @@ function Card({ children }: { children: React.ReactNode }): React.ReactElement {
   );
 }
 
-export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactElement {
+export function SettingsScreen({
+  onBack,
+  onLockChanged,
+}: {
+  onBack: () => void;
+  /** Перечитать настройки блокировки: их держит App, а меняются они здесь. */
+  onLockChanged: () => Promise<LockConfig | null>;
+}): React.ReactElement {
   const {
     identity,
     contacts,
@@ -103,6 +125,38 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
   const [renaming, setRenaming] = useState<Contact | null>(null);
   /** Контакт, для которого открыт лист действий. */
   const [menuFor, setMenuFor] = useState<Contact | null>(null);
+
+  /** Блокировка приложения: null — выключена. */
+  const [lock, setLock] = useState<LockConfig | null>(null);
+  const [pinMode, setPinMode] = useState<"set" | "change" | "disable" | null>(null);
+
+  const refreshLock = useCallback(async () => {
+    setLock(await loadLockConfig());
+  }, []);
+  useEffect(() => {
+    void refreshLock();
+  }, [refreshLock]);
+
+  /** Проверка текущего кода — нужна перед сменой и снятием блокировки. */
+  const verifyCurrentPin = useCallback(
+    async (pin: string): Promise<boolean> => {
+      if (!lock) return false;
+      const crypto = await getCrypto();
+      return crypto.verifyPin(pin, lock.salt, lock.hash);
+    },
+    [lock],
+  );
+
+  /** Любое изменение блокировки сохраняем и сообщаем App: экран блокировки его. */
+  const applyLock = useCallback(
+    async (next: LockConfig | null) => {
+      if (next === null) await clearLockConfig();
+      else await saveLockConfig(next);
+      setLock(next);
+      await onLockChanged();
+    },
+    [onLockChanged],
+  );
 
   /**
    * Диагностика. Когда «на связи», но сообщения не ходят, по экрану этого не
@@ -455,6 +509,92 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
           </View>
         </Card>
 
+        <SectionTitle>Блокировка</SectionTitle>
+        <Card>
+          <View style={styles.row}>
+            <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+              <Icon name="shield" size={19} color={theme.colors.accent} />
+            </View>
+            <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Код при входе</Text>
+            <Switch
+              value={lock !== null}
+              onValueChange={(next) => setPinMode(next ? "set" : "disable")}
+              trackColor={{ true: theme.colors.accent, false: theme.colors.border }}
+              thumbColor={theme.colors.surface}
+            />
+          </View>
+
+          {lock !== null && (
+            <>
+              <View
+                style={[styles.row, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider }]}
+              >
+                <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+                  <Icon name="check" size={19} color={theme.colors.accent} />
+                </View>
+                <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Отпечаток или лицо</Text>
+                <Switch
+                  value={lock.biometrics}
+                  onValueChange={(next) => void applyLock({ ...lock, biometrics: next })}
+                  trackColor={{ true: theme.colors.accent, false: theme.colors.border }}
+                  thumbColor={theme.colors.surface}
+                />
+              </View>
+
+              <View
+                style={[
+                  styles.block,
+                  { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
+                ]}
+              >
+                <Text style={[styles.hint, { color: theme.colors.textMuted, marginTop: 0 }]}>Запрашивать код</Text>
+              </View>
+              {GRACE_OPTIONS.map((option) => (
+                <Pressable
+                  key={option.value}
+                  style={({ pressed }) => [
+                    styles.row,
+                    { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
+                    pressed && { backgroundColor: theme.colors.surfacePressed },
+                  ]}
+                  onPress={() => void applyLock({ ...lock, graceSec: option.value })}
+                >
+                  <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+                    <Icon name="clock" size={19} color={theme.colors.accent} />
+                  </View>
+                  <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>{option.label}</Text>
+                  {lock.graceSec === option.value && <Icon name="check" size={19} color={theme.colors.accent} />}
+                </Pressable>
+              ))}
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.row,
+                  { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
+                  pressed && { backgroundColor: theme.colors.surfacePressed },
+                ]}
+                onPress={() => setPinMode("change")}
+              >
+                <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+                  <Icon name="edit" size={19} color={theme.colors.accent} />
+                </View>
+                <Text style={[styles.rowLabel, { color: theme.colors.textPrimary }]}>Сменить код</Text>
+              </Pressable>
+            </>
+          )}
+
+          <View style={[styles.block, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider }]}>
+            <Text style={[styles.hint, { color: theme.colors.textMuted, marginTop: 0 }]}>
+              Код закрывает переписку от того, кто взял разблокированный телефон в руки. Сообщения при этом продолжают
+              приходить, а уведомления — показываться: блокировка не выключает связь.
+            </Text>
+            <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+              Код не восстанавливается: он никуда не отправляется и не хранится в открытом виде. Забыть его —
+              значит переустановить приложение и потерять ключи вместе со всей перепиской.
+            </Text>
+          </View>
+        </Card>
+
         <SectionTitle>Безопасность</SectionTitle>
         <Card>
           <View style={styles.block}>
@@ -636,6 +776,33 @@ export function SettingsScreen({ onBack }: { onBack: () => void }): React.ReactE
         title={menuFor ? contactTitle(menuFor) : undefined}
         actions={memberActions}
         onClose={() => setMenuFor(null)}
+      />
+
+      <PinSetupModal
+        visible={pinMode !== null}
+        mode={pinMode ?? "set"}
+        verify={verifyCurrentPin}
+        onCancel={() => setPinMode(null)}
+        onDone={(result) => {
+          const mode = pinMode;
+          setPinMode(null);
+          void (async () => {
+            if (result === null) {
+              await applyLock(null);
+              return;
+            }
+            // Остальные настройки при смене кода сохраняем: человек менял код, а
+            // не сбрасывал биометрию и задержку. При первой установке — значения
+            // по умолчанию: биометрия выключена (её надо включить осознанно),
+            // код через минуту.
+            await applyLock({
+              salt: result.salt,
+              hash: result.hash,
+              biometrics: mode === "change" ? (lock?.biometrics ?? false) : false,
+              graceSec: mode === "change" ? (lock?.graceSec ?? 60) : 60,
+            });
+          })();
+        }}
       />
 
       <RenameModal

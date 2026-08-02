@@ -18,6 +18,9 @@ const REQUIRED_FUNCTIONS = [
   "crypto_box_easy",
   "crypto_box_open_easy",
   "crypto_generichash",
+  // Argon2id — хэш PIN-кода блокировки. Проверяем при старте, а не при вводе
+  // кода: «сохранил PIN и не смог войти» — это запертое приложение без выхода.
+  "crypto_pwhash",
   "randombytes_buf",
   "to_base64",
   "from_base64",

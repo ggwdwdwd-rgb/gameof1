@@ -33,6 +33,7 @@ import {
 } from "../notify/notifications";
 import { decryptDeliveredMessage, encryptForChat } from "../chat/encryption";
 import { dmChatId } from "../chat/chatId";
+import { isAppLocked } from "../lock/lockState";
 import { saveIncomingEnvelope, type LocalMediaMeta } from "../chat/media";
 import { WsClient, type ConnectionFailure, type ConnectionState } from "../net/wsClient";
 import type { InviteCreatedPayload, MsgDeliverPayload, RosterMemberPayload } from "../net/protocol";
@@ -261,7 +262,11 @@ export function AppProvider({
    * телефоном в кармане.
    */
   const reportActivity = useCallback((): void => {
-    const active = appActiveRef.current && isScreenOn();
+    // Запертое приложение — не «в сети»: человек к переписке не подошёл, даже
+    // если экран горит. Сходится это за 15 секунд, по тому же интервалу, что и
+    // остальные изменения активности, — отдельного события разблокировки здесь
+    // не хватало бы только для мгновенности.
+    const active = appActiveRef.current && isScreenOn() && !isAppLocked();
     if (active === lastReportedActiveRef.current) return;
     if (wsRef.current?.setActive(active) === true) lastReportedActiveRef.current = active;
   }, []);
@@ -289,8 +294,10 @@ export function AppProvider({
     async (chatId: string): Promise<void> => {
       // Погашенный экран — это не «прочитано», даже если приложение формально
       // активно: событие сворачивания при гашении приходит не на всех
-      // прошивках, поэтому спрашиваем состояние экрана напрямую.
-      if (!appActiveRef.current || !isScreenOn()) return;
+      // прошивках, поэтому спрашиваем состояние экрана напрямую. Экран
+      // блокировки — то же самое: приложение активно, экран включён, но чат под
+      // ним перекрыт и никто его не читает.
+      if (!appActiveRef.current || !isScreenOn() || isAppLocked()) return;
 
       // Уведомления этого чата больше не нужны — пользователь его открыл.
       void dismissChat(chatId);
@@ -542,10 +549,12 @@ export function AppProvider({
           // видно. Раньше условием было «только когда приложение свёрнуто», и
           // уведомления не появлялись, если человек в это время просто листал
           // список чатов.
+          // Заперто — значит открытый чат перекрыт экраном блокировки, и
+          // уведомление нужно: иначе о сообщении не узнать вовсе.
           notify:
             notificationsRef.current &&
             payload.fromUserId !== identity.userId &&
-            !(appActiveRef.current && activeChatRef.current === payload.chatId)
+            !(appActiveRef.current && !isAppLocked() && activeChatRef.current === payload.chatId)
               ? (contentType, plaintext) => {
                   const sender = contactsRef.current.find((c) => c.userId === payload.fromUserId);
                   // catch обязателен: исключение отсюда ушло бы в unhandled

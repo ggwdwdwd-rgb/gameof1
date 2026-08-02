@@ -3,6 +3,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { buildEnvelopeFromLocalFile, persistLocalFile, type LocalMediaMeta } from "./media";
+import { withSystemPicker } from "../lock/systemPicker";
 import { uuidv4 } from "../util/uuid";
 
 export const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
@@ -14,11 +15,14 @@ export interface PreparedMedia {
 
 /** Фото из галереи со сжатием перед отправкой (см. жёсткие требования проекта). */
 export async function pickAndCompressImage(): Promise<PreparedMedia | null> {
-  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted) return null;
-
-  const picked = await ImagePicker.launchImageLibraryAsync({ quality: 0.9 });
-  if (picked.canceled || !picked.assets[0]) return null;
+  // withSystemPicker — чтобы блокировка приложения не считала уход в системное
+  // окно уходом человека и не спрашивала PIN после каждой отправки фото.
+  const picked = await withSystemPicker(async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return null;
+    return ImagePicker.launchImageLibraryAsync({ quality: 0.9 });
+  });
+  if (picked === null || picked.canceled || !picked.assets[0]) return null;
 
   const manipulated = await ImageManipulator.manipulateAsync(
     picked.assets[0].uri,
@@ -38,7 +42,7 @@ export async function pickAndCompressImage(): Promise<PreparedMedia | null> {
 
 /** Произвольный файл до 25 МБ (см. жёсткие требования проекта). */
 export async function pickFile(): Promise<PreparedMedia | { error: "TOO_LARGE" } | null> {
-  const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+  const picked = await withSystemPicker(() => DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true }));
   if (picked.canceled || !picked.assets[0]) return null;
 
   const asset = picked.assets[0];
@@ -58,8 +62,11 @@ export async function pickFile(): Promise<PreparedMedia | { error: "TOO_LARGE" }
 
 /** Разовая отправка геолокации кнопкой «я тут» — не отслеживание, один снимок координат. */
 export async function getCurrentLocationOnce(): Promise<{ lat: number; lng: number } | null> {
-  const permission = await Location.requestForegroundPermissionsAsync();
-  if (!permission.granted) return null;
-  const position = await Location.getCurrentPositionAsync({});
+  const position = await withSystemPicker(async () => {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (!permission.granted) return null;
+    return Location.getCurrentPositionAsync({});
+  });
+  if (position === null) return null;
   return { lat: position.coords.latitude, lng: position.coords.longitude };
 }

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createCrypto } from "../src/index";
 import type { SodiumLike } from "../src/sodium";
-import { getTestSodium } from "./testSodium";
+import { getSumoSodium, getTestSodium } from "./testSodium";
 import { readNativeSodiumExports } from "./deviceExports";
 import { utf8DecodeFallback, utf8EncodeFallback } from "../src/utf8";
 
@@ -367,5 +367,94 @@ describe("UTF-8 без sodium и без TextEncoder", () => {
   it("справляется с длинной строкой (проверка чанкования при декодировании)", () => {
     const long = "строка с кириллицей и эмодзи \u{1F510} ".repeat(20_000);
     expect(utf8DecodeFallback(utf8EncodeFallback(long))).toBe(long);
+  });
+});
+
+/**
+ * PIN-код блокировки приложения.
+ *
+ * Проверяется обвязка, а не Argon2id: что соль каждый раз новая, что верный код
+ * принимается, а неверный — нет, и что вызовы sodium совместимы с нативной
+ * сборкой (иначе на телефоне блокировка станет невыходимой ловушкой: код
+ * введён верно, а хэш не совпадает).
+ */
+describe("PIN-код блокировки", () => {
+  // Своя пара sodium/crypto: обычная сборка libsodium-wrappers не содержит
+  // Argon2id, см. getSumoSodium.
+  let pinSodium: Awaited<ReturnType<typeof getSumoSodium>>;
+  let pinCrypto: ReturnType<typeof createCrypto>;
+
+  beforeAll(async () => {
+    pinSodium = await getSumoSodium();
+    pinCrypto = createCrypto(pinSodium as unknown as SodiumLike);
+  });
+
+  it("соль имеет длину, которую требует Argon2id, и каждый раз новая", () => {
+    const a = pinCrypto.generatePinSalt();
+    const b = pinCrypto.generatePinSalt();
+    expect(pinSodium.from_base64(a)).toHaveLength(pinSodium.crypto_pwhash_SALTBYTES);
+    expect(a).not.toBe(b);
+  });
+
+  it("верный код принимается, неверный — нет", () => {
+    const salt = pinCrypto.generatePinSalt();
+    const hash = pinCrypto.hashPin("4821", salt);
+    expect(pinCrypto.verifyPin("4821", salt, hash)).toBe(true);
+    expect(pinCrypto.verifyPin("4822", salt, hash)).toBe(false);
+    expect(pinCrypto.verifyPin("", salt, hash)).toBe(false);
+    expect(pinCrypto.verifyPin("48210", salt, hash)).toBe(false);
+  });
+
+  it("один и тот же код с одной солью даёт один и тот же хэш", () => {
+    const salt = pinCrypto.generatePinSalt();
+    expect(pinCrypto.hashPin("135790", salt)).toBe(pinCrypto.hashPin("135790", salt));
+  });
+
+  it("одинаковые коды на разных устройствах дают разные хэши (соль своя)", () => {
+    expect(pinCrypto.hashPin("0000", pinCrypto.generatePinSalt())).not.toBe(
+      pinCrypto.hashPin("0000", pinCrypto.generatePinSalt()),
+    );
+  });
+
+  it("код с другой солью не подходит", () => {
+    const salt = pinCrypto.generatePinSalt();
+    const hash = pinCrypto.hashPin("2468", salt);
+    expect(pinCrypto.verifyPin("2468", pinCrypto.generatePinSalt(), hash)).toBe(false);
+  });
+
+  /**
+   * Тот же заслон, что и для шифрования: на телефоне доступно только то, что
+   * экспортирует нативная сборка. Ошибка здесь особенно неприятна — верный код
+   * перестал бы подходить, и человек оказался бы заперт за экраном блокировки
+   * своего же приложения.
+   */
+  it("обращается только к функциям, которые есть в нативной сборке", () => {
+    const availableOnDevice = readNativeSodiumExports();
+
+    const used = new Set<string>();
+    const probe = new Proxy(pinSodium as unknown as Record<string, unknown>, {
+      get(target, prop: string) {
+        used.add(prop);
+        return target[prop];
+      },
+    }) as unknown as SodiumLike;
+    const probed = createCrypto(probe);
+    const probedSalt = probed.generatePinSalt();
+    probed.verifyPin("1111", probedSalt, probed.hashPin("1111", probedSalt));
+    expect([...used].filter((name) => !availableOnDevice.has(name))).toEqual([]);
+
+    // И полная имитация: всё, чего в нативной сборке нет, недоступно вовсе.
+    const deviceSodium = new Proxy(pinSodium as unknown as Record<string, unknown>, {
+      get(target, prop: string) {
+        if (!availableOnDevice.has(prop)) return undefined;
+        return target[prop];
+      },
+    }) as unknown as SodiumLike;
+
+    const onDevice = createCrypto(deviceSodium);
+    const salt = onDevice.generatePinSalt();
+    const hash = onDevice.hashPin("9137", salt);
+    expect(onDevice.verifyPin("9137", salt, hash)).toBe(true);
+    expect(onDevice.verifyPin("9138", salt, hash)).toBe(false);
   });
 });

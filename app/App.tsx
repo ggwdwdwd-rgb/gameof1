@@ -3,9 +3,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppProvider } from "./src/context/AppContext";
+import { useAppLock } from "./src/lock/useAppLock";
 import { AddPersonScreen } from "./src/screens/AddPersonScreen";
 import { ChatListScreen } from "./src/screens/ChatListScreen";
 import { ChatScreen } from "./src/screens/ChatScreen";
+import { LockScreen } from "./src/screens/LockScreen";
 import { OnboardingScreen } from "./src/screens/OnboardingScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { loadIdentity, type DeviceIdentity } from "./src/storage/identity";
@@ -26,6 +28,7 @@ function Root(): React.ReactElement {
   const [identity, setIdentity] = useState<DeviceIdentity | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "chatList" });
   const { crash, clear } = useCrashHandler();
+  const lock = useAppLock();
 
   useEffect(() => {
     void loadIdentity().then((stored) => {
@@ -45,8 +48,14 @@ function Root(): React.ReactElement {
   const screenRef = useRef(screen);
   screenRef.current = screen;
 
+  // Пока показан экран блокировки, «назад» не должен уводить с него на экраны
+  // приложения: там осталось открытым то, что было до сворачивания.
+  const lockedRef = useRef(false);
+  lockedRef.current = lock.state === "locked";
+
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (lockedRef.current) return false; // из блокировки — только выход из приложения
       if (screenRef.current.name === "chatList") return false; // из списка чатов — выход, как и ожидается
       setScreen({ name: "chatList" });
       return true;
@@ -65,7 +74,7 @@ function Root(): React.ReactElement {
     );
   }
 
-  if (loading) {
+  if (loading || lock.state === "loading") {
     return (
       <View style={[styles.loading, { backgroundColor: theme.colors.background }]}>
         <LogoMark size={82} />
@@ -110,13 +119,20 @@ function Root(): React.ReactElement {
       )}
       {screen.name === "settings" && (
         <ScreenTransition key="settings">
-          <SettingsScreen onBack={() => setScreen({ name: "chatList" })} />
+          <SettingsScreen onBack={() => setScreen({ name: "chatList" })} onLockChanged={lock.reload} />
         </ScreenTransition>
       )}
       {screen.name === "addPerson" && (
         <ScreenTransition key="addPerson" from="bottom">
           <AddPersonScreen onBack={() => setScreen({ name: "chatList" })} />
         </ScreenTransition>
+      )}
+      {/* Экран блокировки — поверх всего, но ВНУТРИ AppProvider: соединение под
+          ним продолжает работать, сообщения приходят, уведомления показываются.
+          Иначе включённая блокировка означала бы «не получать сообщения, пока
+          телефон в кармане». */}
+      {lock.state === "locked" && lock.config !== null && (
+        <LockScreen config={lock.config} onUnlocked={lock.unlock} />
       )}
       <StatusBar style={theme.colors.statusBar} />
     </AppProvider>

@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { prepareForGallery } from "../chat/media";
+import { withSystemPicker } from "../lock/systemPicker";
 import { Icon } from "./Icon";
 import { Toast, useToast } from "./Toast";
 
@@ -40,10 +41,12 @@ export function ImageViewer({
       // запрос WRITE_EXTERNAL_STORAGE там всё равно возвращает «отказано» — и
       // проверка granted запретила бы сохранение на ровном месте. Если
       // разрешение действительно нужно, MediaLibrary скажет об этом сама.
-      const permission = await MediaLibrary.getPermissionsAsync(true);
-      if (!permission.granted && permission.canAskAgain) {
-        await MediaLibrary.requestPermissionsAsync(true);
-      }
+      await withSystemPicker(async () => {
+        const permission = await MediaLibrary.getPermissionsAsync(true);
+        if (!permission.granted && permission.canAskAgain) {
+          await MediaLibrary.requestPermissionsAsync(true);
+        }
+      });
 
       // Промежуточная копия в кэше даёт файлу читаемое имя и расширение —
       // без расширения Android отказывается заводить снимок в галерее.
@@ -84,7 +87,7 @@ export function ImageViewer({
         Alert.alert("Недоступно", "На этом устройстве нельзя поделиться файлом.");
         return;
       }
-      await Sharing.shareAsync(uri);
+      await withSystemPicker(() => Sharing.shareAsync(uri));
     } catch (error) {
       Alert.alert("Не удалось поделиться", error instanceof Error ? error.message : "Неизвестная ошибка.");
     }
