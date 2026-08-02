@@ -41,6 +41,7 @@
     "web": "expo start --web",
     "check:sql": "tsx scripts/check-sql.mjs",
     "check:android": "node scripts/check-permissions.mjs",
+    "check:imports": "node scripts/check-native-imports.mjs",
     "check:send": "tsx scripts/check-send.mjs"
   },
   "private": true,

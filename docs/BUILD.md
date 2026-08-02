@@ -114,9 +114,17 @@ cd packages/crypto && npx vitest run          # 31 тест криптограф
 cd ../app && npx tsc -p tsconfig.json --noEmit
 npm run check:sql                              # SQL локальной базы на настоящем SQLite
 npm run check:android                          # разрешения не вырезаны из APK
+npm run check:imports                          # нативные модули не уронят старую сборку
 npx expo export --platform android             # бандл собирается (ловит ошибки импортов)
 cd ../server && npx tsc -p tsconfig.json --noEmit && npm run test:users
 ```
+
+`check:imports` тоже появился не зря: обычный импорт пакета с нативной частью
+требует нативный модуль сразу, на загрузке JS-модуля, и на сборке без него
+приложение падает при запуске целиком — до соединения с сервером. Выглядит это
+как «сообщения не идут», а причина не видна ниоткуда. Я наступил на это дважды
+(`expo-application`, `expo-local-authentication`), теперь проверка ловит такой
+импорт до сборки.
 
 `check:android` появился не зря: плагин `expo-image-picker` умеет вырезать
 разрешения из манифеста (`tools:node="remove"`), и однажды из APK так пропали
