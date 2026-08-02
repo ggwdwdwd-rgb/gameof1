@@ -49,11 +49,16 @@ const TYPING_EXPIRY_MS = 6_000;
 
 const NOTIFICATIONS_SETTING = "notifications_enabled";
 /**
- * Спрашивали ли уже системное разрешение. Отдельно от выключателя: отказ в
- * разрешении не должен выглядеть как «пользователь выключил уведомления»,
- * иначе включить их потом уже нечем.
+ * Отметка «выбор сделал человек».
+ *
+ * Нужна, чтобы отличить осознанное «выключить» от "0", которое записала одна
+ * из прошлых сборок: она сохраняла "0" при отказе в разрешении и больше ничего
+ * не проверяла. У всех, кто ту сборку успел поставить, в настройках так и лежит
+ * "0" — и любое исправление логики их бы не спасло, потому что значение
+ * выглядит как решение пользователя. Отметку прошлые сборки не писали никогда,
+ * поэтому "0" без неё — точно не выбор человека.
  */
-const NOTIFICATIONS_ASKED_SETTING = "notifications_asked";
+const NOTIFICATIONS_CHOSEN_SETTING = "notifications_chosen";
 
 /** Сколько ждём готовности соединения там, где без сервера операция невозможна (создание инвайта). */
 const WAIT_READY_MS = 10_000;
@@ -225,10 +230,11 @@ export function AppProvider({
       cryptoRef.current = crypto;
       setMyFingerprint(crypto.computeFingerprint(identity.identityPublicKey));
 
-      // Только чтение сохранённого выключателя — ничего интерактивного. Всё
+      // Только чтение сохранённых настроек — ничего интерактивного. Всё
       // остальное про уведомления вынесено в отдельную задачу после
       // ws.connect() (см. комментарий там же).
       const stored = await getSetting(NOTIFICATIONS_SETTING);
+      const chosenByUser = (await getSetting(NOTIFICATIONS_CHOSEN_SETTING)) === "1";
       notificationsRef.current = stored === "1";
       if (!cancelled) setNotificationsEnabled(stored === "1");
 
@@ -512,28 +518,31 @@ export function AppProvider({
        * на это с проверкой сборки libsodium; ничего интерактивного и ничего
        * необязательного до connect быть не должно.
        *
-       * Правило простое: "0" в настройках — это осознанное «выключить» самим
-       * пользователем, и его мы уважаем. Во всех остальных случаях включённость
-       * равна наличию системного разрешения.
+       * Правило: "0", записанное человеком, уважаем. Во всех остальных случаях
+       * включённость равна наличию системного разрешения — если разрешение
+       * есть, уведомления работают, и искать выключатель не нужно.
        *
-       * Прошлая версия этого кода записывала "0" при отказе в разрешении — и
-       * дальше уже не спрашивала и не проверяла. Один отказ (или диалог,
-       * закрытый мимо) навсегда выключал уведомления, даже если разрешение
-       * потом выдали в настройках телефона. Ровно на это и было «уведомления не
-       * идут»: пробное уведомление из настроек показывалось, а на сообщения —
-       * нет, потому что выключатель молча стоял в «выкл».
+       * Прошлая версия записывала "0" сама при отказе в разрешении и больше
+       * ничего не проверяла: один отказ (или диалог, закрытый мимо) навсегда
+       * выключал уведомления, даже если разрешение потом выдали в настройках
+       * телефона. Отсюда и было «пробное уведомление показывается, а на
+       * сообщения не приходит»: выключатель молча стоял в «выкл». Такое "0"
+       * отличается отсутствием отметки NOTIFICATIONS_CHOSEN_SETTING — её
+       * прошлые сборки не писали, — и мы его не уважаем, а пересматриваем.
        */
       void (async () => {
         try {
-          if (stored === "0") return; // выключено вручную
+          if (stored === "0" && chosenByUser) return; // выключено человеком
 
-          const asked = (await getSetting(NOTIFICATIONS_ASKED_SETTING)) === "1";
-          const state = asked ? await getPermissionState() : await requestPermission();
-          if (!asked) await setSetting(NOTIFICATIONS_ASKED_SETTING, "1");
+          const state =
+            (await getPermissionState()) === "granted" ? "granted" : await requestPermission();
 
           const on = state === "granted";
           notificationsRef.current = on;
           if (!cancelled) setNotificationsEnabled(on);
+          // Приводим сохранённое значение в соответствие: иначе после
+          // перезапуска до этой задачи опять читалось бы старое "0".
+          await setSetting(NOTIFICATIONS_SETTING, on ? "1" : "0");
         } catch (error) {
           console.warn("не удалось настроить уведомления", error);
         }
@@ -723,6 +732,9 @@ export function AppProvider({
         notificationsRef.current = enabled;
         setNotificationsEnabled(enabled);
         await setSetting(NOTIFICATIONS_SETTING, enabled ? "1" : "0");
+        // Отметка обязательна: только она отличает выбор человека от значения,
+        // записанного самим приложением (см. NOTIFICATIONS_CHOSEN_SETTING).
+        await setSetting(NOTIFICATIONS_CHOSEN_SETTING, "1");
       },
       setActiveChat(chatId) {
         activeChatRef.current = chatId;

@@ -94,8 +94,20 @@ export async function showIncoming(message: IncomingNotification): Promise<void>
       data: { chatId: message.chatId },
     },
     trigger: immediateTrigger(),
-    identifier: `chat-${message.chatId}`,
+    identifier: notificationId(message.chatId),
   });
+}
+
+/**
+ * Идентификатор уведомления из chatId.
+ *
+ * chatId выглядит как dm:<uuid>:<uuid> — с двоеточиями. Идентификатор уходит в
+ * нативный слой как ключ, и полагаться на то, что двоеточия там всюду
+ * безобидны, не стоит: проверить это на устройстве я не могу, а цена ошибки —
+ * молчащие уведомления. Оставляем только буквы, цифры и дефис.
+ */
+function notificationId(chatId: string): string {
+  return `chat-${chatId.replace(/[^A-Za-z0-9-]/g, "-")}`;
 }
 
 /**
@@ -130,7 +142,7 @@ export async function showTest(): Promise<void> {
 /** Убираем уведомления чата, когда пользователь его открыл. */
 export async function dismissChat(chatId: string): Promise<void> {
   try {
-    await Notifications.dismissNotificationAsync(`chat-${chatId}`);
+    await Notifications.dismissNotificationAsync(notificationId(chatId));
   } catch {
     // Уведомления могло уже не быть — это не ошибка.
   }
