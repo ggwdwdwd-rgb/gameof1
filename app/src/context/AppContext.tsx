@@ -252,6 +252,41 @@ export function AppProvider({
     startBackgroundMode("Cry", connected ? "На связи — сообщения дойдут" : "Нет соединения, переподключаюсь");
   }, []);
 
+  /**
+   * Отмечает чат прочитанным — но только если человек действительно смотрит на
+   * экран.
+   *
+   * Проверка активности обязательна. С работой в фоне экран чата остаётся
+   * смонтированным после сворачивания приложения, и каждое пришедшее сообщение
+   * тут же помечалось прочитанным: у собеседника появлялись две галочки, хотя
+   * сообщение никто не видел. До работы в фоне это почти не проявлялось —
+   * процесс успевали выгрузить.
+   */
+  const markChatReadIfVisible = useCallback(
+    async (chatId: string): Promise<void> => {
+      if (!appActiveRef.current) return;
+
+      // Уведомления этого чата больше не нужны — пользователь его открыл.
+      void dismissChat(chatId);
+
+      const changed = await markChatRead(chatId, identity.userId);
+      if (changed.length === 0) return;
+
+      // Локально помечаем всегда, чтобы счётчик непрочитанного гас сразу при
+      // открытии чата. Квитанции, которые не ушли (нет связи), кладём в
+      // очередь и досылаем при подключении — иначе у собеседника сообщение
+      // навсегда осталось бы «доставлено» вместо «прочитано».
+      const ws = wsRef.current;
+      for (const msgId of changed) {
+        if (!ws?.ackMessage(msgId, chatId, "read")) {
+          await queueAck({ msgId, chatId, status: "read" });
+        }
+      }
+      chatEvents.emit("messageStatusChanged", chatId, changed[0]!);
+    },
+    [identity.userId, chatEvents],
+  );
+
   useEffect(() => {
     let cancelled = false;
     const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -605,6 +640,10 @@ export function AppProvider({
       // Службу могли убить, пока приложение было свёрнуто. Возврат на экран —
       // единственный момент, когда её снова разрешено запустить.
       applyBackgroundMode(ws?.state === "connected");
+      // Пока приложение было свёрнуто, «прочитано» не отправлялось. Если чат
+      // открыт, человек видит его прямо сейчас — вот теперь и отмечаем.
+      const openChat = activeChatRef.current;
+      if (openChat !== null) void markChatReadIfVisible(openChat);
     });
 
     return () => {
@@ -686,25 +725,7 @@ export function AppProvider({
         chatEvents.emit("messageInserted", chatId);
         wsRef.current?.deleteMessage(msgId, chatId);
       },
-      async markChatRead(chatId) {
-        // Уведомления этого чата больше не нужны — пользователь его открыл.
-        void dismissChat(chatId);
-
-        const changed = await markChatRead(chatId, identity.userId);
-        if (changed.length === 0) return;
-
-        // Локально помечаем всегда, чтобы счётчик непрочитанного гас сразу при
-        // открытии чата. Квитанции, которые не ушли (нет связи), кладём в
-        // очередь и досылаем при подключении — иначе у собеседника сообщение
-        // навсегда осталось бы «доставлено» вместо «прочитано».
-        const ws = wsRef.current;
-        for (const msgId of changed) {
-          if (!ws?.ackMessage(msgId, chatId, "read")) {
-            await queueAck({ msgId, chatId, status: "read" });
-          }
-        }
-        chatEvents.emit("messageStatusChanged", chatId, changed[0]!);
-      },
+      markChatRead: markChatReadIfVisible,
       setTyping(chatId, isTyping) {
         wsRef.current?.sendTyping(chatId, isTyping);
       },
@@ -933,7 +954,7 @@ export function AppProvider({
     // Только стабильные зависимости: identity не меняется за жизнь провайдера,
     // chatEvents и applyBackgroundMode созданы через useMemo/useCallback без
     // зависимостей, остальное — рефы.
-  }, [identity, chatEvents, applyBackgroundMode]);
+  }, [identity, chatEvents, applyBackgroundMode, markChatReadIfVisible]);
 
   const value = useMemo<AppContextValue>(
     () => ({
