@@ -33,6 +33,7 @@ import {
 } from "../notify/notifications";
 import { decryptDeliveredMessage, encryptForChat } from "../chat/encryption";
 import { dmChatId } from "../chat/chatId";
+import { claimConnection, connectionOwner, releaseConnection } from "../background/owner";
 import { isBiometricsSupported } from "../lock/biometrics";
 import { isAppLocked } from "../lock/lockState";
 import { saveIncomingEnvelope, type LocalMediaMeta } from "../chat/media";
@@ -57,7 +58,7 @@ const MEDIA_CONTENT_TYPES = new Set(["image", "voice", "file"]);
 /** Собеседник считается печатающим не дольше этого времени — страховка от «зависшего» индикатора. */
 const TYPING_EXPIRY_MS = 6_000;
 
-const NOTIFICATIONS_SETTING = "notifications_enabled";
+export const NOTIFICATIONS_SETTING = "notifications_enabled";
 /**
  * Отметка «выбор сделал человек».
  *
@@ -79,7 +80,7 @@ const BACKGROUND_SETTING = "background_enabled";
 /** Сколько ждём готовности соединения там, где без сервера операция невозможна (создание инвайта). */
 const WAIT_READY_MS = 10_000;
 
-interface ChatEvents extends Record<string, (...args: never[]) => void> {
+export interface ChatEvents extends Record<string, (...args: never[]) => void> {
   messageInserted: (chatId: string) => void;
   // chatId обязателен: без него каждый экран перечитывал свою переписку на
   // любое изменение статуса в любом чате.
@@ -670,6 +671,10 @@ export function AppProvider({
         })();
       });
 
+      // Экран забирает соединение себе: если его в этот момент держала
+      // headless-задача службы, она закроет своё и уступит. Два соединения с
+      // одним deviceId сервер считает конкурирующими и выбивают друг друга.
+      claimConnection("app");
       ws.connect();
 
       /**
@@ -750,6 +755,9 @@ export function AppProvider({
       appStateSub.remove();
       for (const timer of typingTimers.values()) clearTimeout(timer);
       wsRef.current?.disconnect();
+      // Отпускаем соединение: с этого момента его может занять headless-задача
+      // службы переднего плана.
+      releaseConnection("app");
     };
     // identity стабилен на весь жизненный цикл AppProvider — переавторизация не нужна
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1004,7 +1012,7 @@ export function AppProvider({
           backgroundRef.current && bgAvailable && isBackgroundModeRunning(),
           !bgAvailable
             ? "нет в этой сборке — нужен новый APK"
-            : `настройка: ${backgroundRef.current ? "вкл" : "выкл"}, служба: ${isBackgroundModeRunning() ? "работает" : "не запущена"}`,
+            : `настройка: ${backgroundRef.current ? "вкл" : "выкл"}, служба: ${isBackgroundModeRunning() ? "работает" : "не запущена"}, соединение держит: ${connectionOwner() === "background" ? "фон" : connectionOwner() === "app" ? "экран" : "никто"}`,
         );
 
         // Нативные модули, добавленные позже сборки, — отдельная строка: их
@@ -1153,7 +1161,14 @@ export function AppProvider({
 }
 
 /** true, если сообщение действительно добавлено (а не было уже известно). */
-async function handleIncomingMessage(
+/**
+ * Разбор входящего сообщения: расшифровать, записать, подтвердить, уведомить.
+ *
+ * Экспортируется, потому что этим же занимается соединение без экрана
+ * (src/background/task.ts): когда приложение смахнули из недавних, сообщения
+ * принимает headless-задача службы, а разбирать их должен ровно тот же код.
+ */
+export async function handleIncomingMessage(
   crypto: Crypto,
   ws: WsClient,
   identity: DeviceIdentity,

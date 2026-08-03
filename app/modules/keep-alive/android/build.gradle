@@ -24,4 +24,9 @@ repositories {
 dependencies {
   // NotificationCompat — из core-ktx; та же версия, что использует expo-audio.
   implementation 'androidx.core:core-ktx:1.15.0'
+  // ReactHost и headless-задачи: служба сама поднимает JS-часть, когда Activity
+  // уже нет (см. KeepAliveService.startJsTask). Версию подставляет
+  // expo-module-gradle-plugin из приложения — так же, как это делает
+  // expo-modules-core.
+  implementation 'com.facebook.react:react-android'
 }
