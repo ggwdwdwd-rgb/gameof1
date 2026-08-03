@@ -65,6 +65,23 @@ export function send(socket: WebSocket, envelope: Envelope): void {
   }
 }
 
+/**
+ * Рассылка только перечисленным участникам.
+ *
+ * Заменяет broadcastToAllExcept для всего, что касается конкретного человека:
+ * присутствие, смена имени, удаление. Раньше это уходило всем подключённым — то
+ * есть незнакомый человек, создавший аккаунт, светился у каждого. С аккаунтами и
+ * свободной регистрацией так нельзя: круг оповещения — только контакты.
+ */
+export function broadcastToUsers(userIds: readonly string[], envelope: Envelope, exceptDeviceId?: string): void {
+  const targets = new Set(userIds);
+  for (const conn of connections.values()) {
+    if (conn.deviceId === exceptDeviceId) continue;
+    if (!targets.has(conn.userId)) continue;
+    send(conn.socket, envelope);
+  }
+}
+
 /** excludeDeviceId = null — отправить всем, включая другие устройства автора. */
 export function broadcastToAllExcept(excludeDeviceId: string | null, envelope: Envelope): void {
   for (const conn of connections.values()) {

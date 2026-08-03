@@ -7,12 +7,23 @@ import { recipientDeviceIds } from "./handlers/chat.js";
 import { handleInviteRedeem } from "./handlers/invite.js";
 import { createInvite } from "../invites.js";
 import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from "./handlers/message.js";
-import { getRosterExcluding, touchLastSeen } from "./handlers/roster.js";
+import { getContactsFor, touchLastSeen } from "./handlers/roster.js";
 import { updateDisplayName } from "./handlers/profile.js";
 import { findDevice, setDeviceRevoked } from "../devices.js";
+import {
+  accountOf,
+  contactIdsOf,
+  linkContacts,
+  login,
+  publicUser,
+  register,
+  searchUser,
+  setUsername,
+  VALIDATION_MESSAGES,
+} from "../accounts.js";
 import { deviceIdsOf, isAdmin, removeUser, userExists, wouldLeaveNoAdmin } from "../users.js";
 import {
-  broadcastToAllExcept,
+  broadcastToUsers,
   closeDevices,
   hasOtherConnections,
   isUserOnline,
@@ -24,7 +35,10 @@ import {
 } from "./registry.js";
 import {
   isEnvelope,
+  type AuthLoginPayload,
+  type AuthRegisterPayload,
   type AuthResponsePayload,
+  type ContactAddPayload,
   type Envelope,
   type HistoryFetchPayload,
   type InviteCreatePayload,
@@ -37,6 +51,8 @@ import {
   type PresenceSetPayload,
   type ProfileUpdatePayload,
   type TypingPayload,
+  type UsernameSetPayload,
+  type UserSearchPayload,
 } from "./types.js";
 
 type ConnState =
@@ -102,10 +118,13 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           );
           // roster формируем уже после registerConnection, иначе сам подключившийся
           // не увидел бы себя онлайн у остальных в первый момент.
-          send(socket, envelope("roster.snapshot", { members: getRosterExcluding(result.deviceId) }));
-          broadcastToAllExcept(
-            result.deviceId,
+          send(socket, envelope("roster.snapshot", { members: getContactsFor(result.userId, result.deviceId) }));
+          // Присутствие — только контактам. Раньше уходило всем подключённым, то
+          // есть посторонний, создавший аккаунт, светился у каждого.
+          broadcastToUsers(
+            contactIdsOf(result.userId),
             envelope("presence", { userId: result.userId, online: true, lastSeenAt: null }),
+            result.deviceId,
           );
           log.info({ userId: result.userId, deviceId: result.deviceId }, "устройство аутентифицировано");
           return;
@@ -122,31 +141,143 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           state = { stage: "authenticated", userId: result.userId, deviceId: payload.deviceId };
           registerConnection(payload.deviceId, result.userId, socket);
           touchLastSeen(result.userId);
+          // Вошедший по коду становится контактом того, кто код выпустил, — и
+          // только его. Общего списка участников больше нет, поэтому «показать
+          // всем» здесь означало бы вернуть прежнее «все видят всех».
+          if (result.invitedBy !== null) linkContacts(result.userId, result.invitedBy);
+
           send(socket, envelope("invite.redeem.ok", { userId: result.userId, isAdmin: isAdmin(result.userId) }));
-          send(socket, envelope("roster.snapshot", { members: getRosterExcluding(payload.deviceId) }));
-          broadcastToAllExcept(
-            payload.deviceId,
-            envelope("member.joined", {
-              userId: result.userId,
-              deviceId: payload.deviceId,
-              displayName: payload.displayName,
-              identityPublicKey: payload.identityPublicKey,
-              encryptionPublicKey: payload.encryptionPublicKey,
-              joinedAt: Date.now(),
-            }),
-          );
-          // Присутствие рассылаем и здесь: member.joined говорит «появился
-          // участник», но не «он сейчас в сети», а клиент ведёт эти состояния
-          // отдельно.
-          broadcastToAllExcept(
-            payload.deviceId,
-            envelope("presence", { userId: result.userId, online: true, lastSeenAt: null }),
-          );
+          send(socket, envelope("roster.snapshot", { members: getContactsFor(result.userId, payload.deviceId) }));
+
+          if (result.invitedBy !== null) {
+            broadcastToUsers(
+              [result.invitedBy],
+              envelope("member.joined", {
+                userId: result.userId,
+                deviceId: payload.deviceId,
+                displayName: payload.displayName,
+                username: null,
+                identityPublicKey: payload.identityPublicKey,
+                encryptionPublicKey: payload.encryptionPublicKey,
+                joinedAt: Date.now(),
+              }),
+            );
+            // Присутствие отдельно: member.joined говорит «появился контакт», но
+            // не «он сейчас в сети», а клиент ведёт эти состояния раздельно.
+            broadcastToUsers(
+              [result.invitedBy],
+              envelope("presence", { userId: result.userId, online: true, lastSeenAt: null }),
+            );
+          }
           log.info({ userId: result.userId }, "новый участник зарегистрирован по инвайту");
           return;
         }
 
-        send(socket, envelope("error", { code: "NOT_AUTHENTICATED", message: "Сначала auth.response или invite.redeem" }));
+        /**
+         * Регистрация аккаунта — основной путь вместо одноразового кода.
+         *
+         * Никого ни о чём не оповещаем: у нового аккаунта нет контактов, и
+         * показывать его кому-либо нельзя. Именно этим свободная регистрация
+         * отличается от прежних инвайтов.
+         */
+        if (parsed.type === "auth.register") {
+          const payload = parsed.payload as AuthRegisterPayload;
+          const result = await register({
+            email: payload.email,
+            password: payload.password,
+            username: payload.username,
+            displayName: payload.displayName,
+            phone: payload.phone,
+            deviceId: payload.deviceId,
+            identityPublicKey: payload.identityPublicKey,
+            encryptionPublicKey: payload.encryptionPublicKey,
+          });
+          if (!result.ok) {
+            log.warn({ code: result.code }, "отказ в регистрации");
+            send(
+              socket,
+              envelope("auth.register.error", { code: result.code, message: VALIDATION_MESSAGES[result.code] }),
+            );
+            return;
+          }
+          state = { stage: "authenticated", userId: result.account.userId, deviceId: payload.deviceId };
+          registerConnection(payload.deviceId, result.account.userId, socket);
+          touchLastSeen(result.account.userId);
+          send(
+            socket,
+            envelope("auth.register.ok", {
+              userId: result.account.userId,
+              username: result.account.username,
+              displayName: result.account.displayName,
+              isAdmin: result.account.isAdmin,
+              serverTime: Date.now(),
+            }),
+          );
+          // Пустой список — но отправить его нужно: клиент ждёт снимок, чтобы
+          // понять, что подключение завершилось.
+          send(socket, envelope("roster.snapshot", { members: [] }));
+          log.info({ userId: result.account.userId }, "зарегистрирован аккаунт");
+          return;
+        }
+
+        /** Вход по почте и паролю: привязывает это устройство к аккаунту. */
+        if (parsed.type === "auth.login") {
+          const payload = parsed.payload as AuthLoginPayload;
+          const result = await login({
+            email: payload.email,
+            password: payload.password,
+            deviceId: payload.deviceId,
+            identityPublicKey: payload.identityPublicKey,
+            encryptionPublicKey: payload.encryptionPublicKey,
+          });
+          if (!result.ok) {
+            log.warn({ code: result.code }, "отказ во входе");
+            send(
+              socket,
+              envelope("auth.login.error", {
+                code: result.code,
+                message:
+                  result.code === "NO_PASSWORD"
+                    ? "У этого аккаунта нет пароля: он был создан по коду приглашения. Войдите с прежнего устройства и задайте пароль."
+                    : "Неверная почта или пароль",
+              }),
+            );
+            return;
+          }
+          state = { stage: "authenticated", userId: result.account.userId, deviceId: payload.deviceId };
+          registerConnection(payload.deviceId, result.account.userId, socket);
+          touchLastSeen(result.account.userId);
+          send(
+            socket,
+            envelope("auth.login.ok", {
+              userId: result.account.userId,
+              username: result.account.username,
+              displayName: result.account.displayName,
+              isAdmin: result.account.isAdmin,
+              serverTime: Date.now(),
+            }),
+          );
+          send(
+            socket,
+            envelope("roster.snapshot", { members: getContactsFor(result.account.userId, payload.deviceId) }),
+          );
+          // Контактам сообщаем, что человек в сети: для них он не новый.
+          broadcastToUsers(
+            contactIdsOf(result.account.userId),
+            envelope("presence", { userId: result.account.userId, online: true, lastSeenAt: null }),
+            payload.deviceId,
+          );
+          log.info({ userId: result.account.userId }, "вход по почте, устройство привязано");
+          return;
+        }
+
+        send(
+          socket,
+          envelope("error", {
+            code: "NOT_AUTHENTICATED",
+            message: "Сначала auth.register, auth.login или auth.response",
+          }),
+        );
         return;
       }
 
@@ -155,6 +286,70 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
 
       if (parsed.type === "ping") {
         send(socket, envelope("pong", {}));
+        return;
+      }
+
+      /**
+       * Поиск человека по @тегу, почте или телефону.
+       *
+       * Только точное совпадение и только один результат. Поиск по части тега
+       * позволил бы обойти сервер и собрать всех участников — то есть вернул бы
+       * ровно то, от чего мы ушли, убрав общий roster.
+       */
+      if (parsed.type === "user.search") {
+        const payload = parsed.payload as UserSearchPayload;
+        const found = searchUser(payload.query, userId);
+        send(socket, envelope("user.found", { user: found }));
+        return;
+      }
+
+      /**
+       * Добавление найденного человека в контакты.
+       *
+       * Связь сразу взаимная: чтобы ответить, второй стороне нужны публичные
+       * ключи первой, а сам человек должен увидеть чат, а не молчащее ничто.
+       * Согласия не спрашиваем — как в любом мессенджере, где можно написать
+       * первым.
+       */
+      if (parsed.type === "contact.add") {
+        const payload = parsed.payload as ContactAddPayload;
+        if (payload.userId === userId) {
+          send(socket, envelope("error", { code: "CANNOT_ADD_SELF", message: "Себя добавить нельзя" }));
+          return;
+        }
+        const peer = publicUser(payload.userId);
+        if (!peer) {
+          send(socket, envelope("error", { code: "NO_SUCH_USER", message: "Такого участника нет" }));
+          return;
+        }
+        linkContacts(userId, payload.userId);
+
+        // Себе отдаём карточку добавленного, а ему — свою: обе стороны должны
+        // получить ключи, иначе переписку нечем шифровать.
+        send(socket, envelope("contact.added", { user: peer, online: isUserOnline(payload.userId) }));
+        const me = publicUser(userId);
+        if (me) {
+          broadcastToUsers([payload.userId], envelope("contact.added", { user: me, online: true }));
+        }
+        log.info({ userId, added: payload.userId }, "контакт добавлен");
+        return;
+      }
+
+      /** Смена своего @тега. */
+      if (parsed.type === "username.set") {
+        const payload = parsed.payload as UsernameSetPayload;
+        const error = setUsername(userId, payload.username);
+        if (error !== null) {
+          send(socket, envelope("error", { code: error, message: VALIDATION_MESSAGES[error] }));
+          return;
+        }
+        const account = accountOf(userId);
+        send(socket, envelope("username.ok", { username: account?.username ?? null }));
+        // Тег виден контактам в карточке — сообщаем им, но никому больше.
+        broadcastToUsers(
+          contactIdsOf(userId),
+          envelope("member.updated", { userId, displayName: account?.displayName ?? "", username: account?.username ?? null }),
+        );
         return;
       }
 
@@ -169,6 +364,12 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
       if (parsed.type === "msg.send") {
         const payload = parsed.payload as MsgSendPayload;
         const result = handleMsgSend(userId, deviceId, payload);
+        // Написал — значит вы контакты. Страховка на случай, если клиент
+        // отправил, не позвав contact.add: без связи получатель не увидел бы
+        // человека в списке после перезапуска, хотя переписка уже есть.
+        if (result.ok && !result.duplicate) {
+          for (const recipient of result.recipients) linkContacts(userId, recipient);
+        }
         if (!result.ok) {
           send(socket, envelope("error", { code: result.code, message: "Сообщение не принято" }));
           return;
@@ -237,7 +438,7 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
         // двух устройствах уход одного в фон ещё не значит, что человек ушёл.
         const online = isUserOnline(userId);
         const lastSeenAt = online ? null : touchLastSeen(userId);
-        broadcastToAllExcept(deviceId, envelope("presence", { userId, online, lastSeenAt }));
+        broadcastToUsers(contactIdsOf(userId), envelope("presence", { userId, online, lastSeenAt }), deviceId);
         return;
       }
 
@@ -263,8 +464,11 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           return;
         }
 
-        broadcastToAllExcept(
-          null,
+        // Кругу контактов отозванного плюс самому администратору: он ждёт
+        // подтверждения своего же действия, а его контактом человек может и не
+        // быть.
+        broadcastToUsers(
+          [...contactIdsOf(device.userId), userId],
           envelope("member.revoked", { userId: device.userId, deviceId: device.id, revoked: payload.revoked === true }),
         );
         // Соединение отозванного устройства рвём сразу: иначе оно продолжало бы
@@ -304,13 +508,15 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           return;
         }
 
-        // deviceId собираем до удаления: после него в базе их уже не найти.
+        // deviceId и контакты собираем до удаления: после него в базе их уже не найти.
         const devices = deviceIdsOf(payload.userId);
+        const contactsOfRemoved = contactIdsOf(payload.userId);
         const stats = removeUser(payload.userId);
         // Сначала оповещаем остальных, потом рвём соединения удалённого:
         // иначе он получил бы сообщение о собственном удалении и обиделся бы
         // зря — а главное, порядок здесь не важен никому, кроме читателя.
-        broadcastToAllExcept(null, envelope("member.removed", { userId: payload.userId }));
+        // Контакты собираем ДО удаления: после него связей в базе уже нет.
+        broadcastToUsers([...contactsOfRemoved, userId], envelope("member.removed", { userId: payload.userId }));
         closeDevices(devices);
         log.warn({ userId: payload.userId, by: userId, ...stats }, "участник удалён");
         return;
@@ -325,7 +531,13 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
         }
         // Имя видят все участники, поэтому рассылаем всем, включая другие
         // устройства автора.
-        broadcastToAllExcept(null, envelope("member.updated", { userId, displayName }));
+        // Себе тоже: имя меняют с одного устройства, а показать его должны все
+        // свои. Плюс контактам — и никому больше.
+        const updated = accountOf(userId);
+        broadcastToUsers(
+          [...contactIdsOf(userId), userId],
+          envelope("member.updated", { userId, displayName, username: updated?.username ?? null }),
+        );
         log.info({ userId }, "участник сменил имя");
         return;
       }
@@ -363,6 +575,6 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
     // при двух устройствах закрытие одного не означает, что человек ушёл.
     if (hasOtherConnections(userId, deviceId)) return;
     const lastSeenAt = touchLastSeen(userId);
-    broadcastToAllExcept(null, envelope("presence", { userId, online: false, lastSeenAt }));
+    broadcastToUsers(contactIdsOf(userId), envelope("presence", { userId, online: false, lastSeenAt }));
   });
 }

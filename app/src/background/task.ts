@@ -3,7 +3,7 @@ import { handleIncomingMessage, NOTIFICATIONS_SETTING, type ChatEvents } from ".
 import { getCrypto } from "../crypto/sodium";
 import { deleteContactWithChat, listContacts, upsertContact, type Contact } from "../db/contacts";
 import { getSetting, setSetting } from "../db/settings";
-import { getLastSyncedTs, setLastSyncedTs } from "../db/syncState";
+import { getSyncCursor, setSyncCursor } from "../db/syncState";
 import { HISTORY_PAGE_LIMIT, WsClient } from "../net/wsClient";
 import type { RosterMemberPayload } from "../net/protocol";
 import { describeForNotification, showIncoming } from "../notify/notifications";
@@ -135,7 +135,7 @@ function holdConnection(identity: Identity, crypto: Crypto, known: Contact[]): P
       // Догоняем то, что пришло, пока соединения не было.
       for (const contact of contacts) {
         const chatId = dmChatId(identity.userId, contact.userId);
-        ws.fetchHistory(chatId, await getLastSyncedTs(chatId));
+        ws.fetchHistory(chatId, await getSyncCursor(chatId));
       }
     })().catch((error: unknown) => {
       console.warn("фон: не удалось разобрать список участников", error);
@@ -185,10 +185,14 @@ function holdConnection(identity: Identity, crypto: Crypto, known: Contact[]): P
         });
       }
       if (maxTs === 0) return;
-      const previous = await getLastSyncedTs(payload.chatId);
-      await setLastSyncedTs(payload.chatId, maxTs);
-      if (payload.messages.length >= HISTORY_PAGE_LIMIT && maxTs > previous) {
-        ws.fetchHistory(payload.chatId, maxTs);
+      const previous = await getSyncCursor(payload.chatId);
+      const last = payload.messages[payload.messages.length - 1];
+      await setSyncCursor(payload.chatId, maxTs, last?.msgId ?? "");
+      if (
+        payload.messages.length >= HISTORY_PAGE_LIMIT &&
+        (maxTs > previous.ts || (last !== undefined && last.msgId !== previous.id))
+      ) {
+        ws.fetchHistory(payload.chatId, { ts: maxTs, id: last?.msgId ?? null });
       }
     })().catch((error: unknown) => {
       console.warn("фон: не удалось разобрать историю", error);

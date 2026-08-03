@@ -154,15 +154,22 @@ export function handleHistoryFetch(userId: string, payload: HistoryFetchPayload)
   if (!isParticipant(payload.chatId, userId)) return null;
 
   const limit = Math.min(payload.limit ?? 100, 500);
+  // Курсор — пара (время, id). Только по времени было недостаточно: сообщения из
+  // одной пачки попадают в одну миллисекунду, и если такая группа разрывается
+  // границей страницы, остаток терялся молча. Порядок сортировки обязан
+  // совпадать с условием, иначе «следующая страница» пропустит середину.
+  const sinceId = payload.sinceId ?? null;
   const rows = db
     .prepare(
       `SELECT id, chat_id, from_user_id, from_device_id, content_type, ciphertext, nonce, reply_to, key_version, created_at, ttl_expires_at
        FROM messages
-       WHERE chat_id = ? AND created_at > ? AND deleted_at IS NULL
-       ORDER BY created_at ASC
+       WHERE chat_id = ?
+         AND (created_at > ? OR (? IS NOT NULL AND created_at = ? AND id > ?))
+         AND deleted_at IS NULL
+       ORDER BY created_at ASC, id ASC
        LIMIT ?`,
     )
-    .all(payload.chatId, payload.sinceTs, limit) as MessageRow[];
+    .all(payload.chatId, payload.sinceTs, sinceId, payload.sinceTs, sinceId, limit) as MessageRow[];
 
   return rows.map(rowToDeliverable);
 }

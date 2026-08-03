@@ -23,7 +23,7 @@ import {
 } from "../db/messages";
 import { listPendingAcks, queueAck, removePendingAck } from "../db/pendingAcks";
 import { getSetting, setSetting } from "../db/settings";
-import { getLastSyncedTs, setLastSyncedTs } from "../db/syncState";
+import { getSyncCursor, setSyncCursor } from "../db/syncState";
 import {
   describeForNotification,
   dismissChat,
@@ -448,7 +448,7 @@ export function AppProvider({
           // Синхронизация истории по всем личным чатам после (пере)подключения.
           for (const member of payload.members) {
             const chatId = dmChatId(identity.userId, member.userId);
-            ws.fetchHistory(chatId, await getLastSyncedTs(chatId));
+            ws.fetchHistory(chatId, await getSyncCursor(chatId));
           }
         })().catch((error: unknown) => {
           setConnectionFailure({
@@ -649,8 +649,9 @@ export function AppProvider({
           if (inserted > 0) chatEvents.emit("messageInserted", payload.chatId);
           if (maxTs === 0) return;
 
-          const previous = await getLastSyncedTs(payload.chatId);
-          await setLastSyncedTs(payload.chatId, maxTs);
+          const previous = await getSyncCursor(payload.chatId);
+          const last = payload.messages[payload.messages.length - 1];
+          await setSyncCursor(payload.chatId, maxTs, last?.msgId ?? "");
 
           /**
            * Полная страница означает, что на сервере есть ещё — просим следующую
@@ -665,8 +666,14 @@ export function AppProvider({
            * состоящая из сообщений с одинаковым временем, запрашивалась бы по
            * кругу вечно (сервер отдаёт строго новее курсора).
            */
-          if (payload.messages.length >= HISTORY_PAGE_LIMIT && maxTs > previous) {
-            ws.fetchHistory(payload.chatId, maxTs);
+          // Полная страница означает «на сервере есть ещё». Условие про курсор
+          // защищает от кругового запроса, если страница целиком оказалась из
+          // сообщений с одним временем и тем же последним id.
+          if (
+            payload.messages.length >= HISTORY_PAGE_LIMIT &&
+            (maxTs > previous.ts || (last !== undefined && last.msgId !== previous.id))
+          ) {
+            ws.fetchHistory(payload.chatId, { ts: maxTs, id: last?.msgId ?? null });
           }
         })();
       });
@@ -1075,7 +1082,8 @@ export function AppProvider({
           };
           const offPage = ws.events.on("historyPage", () => finish(true));
           const offError = ws.events.on("errorPacket", () => finish(false));
-          ws.fetchHistory(chatId, Date.now());
+          // Курсор из будущего: нужен сам факт ответа сервера, а не сообщения.
+          ws.fetchHistory(chatId, { ts: Date.now(), id: null });
         });
         add("Сервер отвечает на запросы", answered, answered ? "" : "ответа нет за 8 секунд");
 

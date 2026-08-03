@@ -17,6 +17,47 @@ export interface InviteCreatePayload {
   ttlHours?: number;
 }
 
+/**
+ * Регистрация аккаунта. Заменяет вход по одноразовому коду как основной путь.
+ *
+ * Ключи присылает клиент: сервер их не создаёт и не может — приватная часть
+ * никогда не покидает телефон.
+ */
+export interface AuthRegisterPayload {
+  email: string;
+  password: string;
+  username: string;
+  displayName: string;
+  phone?: string;
+  deviceId: string;
+  identityPublicKey: string; // base64, Ed25519
+  encryptionPublicKey: string; // base64, X25519
+}
+
+/** Вход по почте и паролю: привязывает это устройство к существующему аккаунту. */
+export interface AuthLoginPayload {
+  email: string;
+  password: string;
+  deviceId: string;
+  identityPublicKey: string;
+  encryptionPublicKey: string;
+}
+
+/** Поиск человека по @тегу, почте или телефону — только точное совпадение. */
+export interface UserSearchPayload {
+  query: string;
+}
+
+/** Добавление найденного человека в контакты (связь сразу взаимная). */
+export interface ContactAddPayload {
+  userId: string;
+}
+
+/** Смена своего @тега. */
+export interface UsernameSetPayload {
+  username: string;
+}
+
 export interface InviteRedeemPayload {
   code: string;
   deviceId: string;
@@ -62,6 +103,19 @@ export interface TypingPayload {
 export interface HistoryFetchPayload {
   chatId: string;
   sinceTs: number;
+  /**
+   * id последнего уже полученного сообщения — вторая половина курсора.
+   *
+   * Одного времени недостаточно: сообщения, отправленные пачкой, попадают в одну
+   * миллисекунду, и если такая пара разрывается границей страницы, условие
+   * `created_at > sinceTs` теряет остаток. На стресс-тесте из 212 сообщений так
+   * пропадало одно — молча, без единой ошибки. С парой (время, id) порядок
+   * строгий и пропустить нечего.
+   *
+   * Может отсутствовать: старый клиент его не присылает, тогда работает прежнее
+   * сравнение только по времени.
+   */
+  sinceId?: string;
   limit?: number;
 }
 

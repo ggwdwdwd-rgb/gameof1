@@ -57,7 +57,10 @@ CREATE TABLE IF NOT EXISTS pending_acks (
 
 CREATE TABLE IF NOT EXISTS sync_state (
   chat_id       TEXT PRIMARY KEY,
-  last_synced_ts INTEGER NOT NULL DEFAULT 0
+  last_synced_ts INTEGER NOT NULL DEFAULT 0,
+  -- id последнего разобранного сообщения: вторая половина курсора. Только по
+  -- времени сообщения из одной миллисекунды терялись на границе страницы.
+  last_synced_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -78,6 +81,8 @@ CREATE TABLE IF NOT EXISTS settings (
  */
 export const REQUIRED_COLUMNS: readonly { table: string; column: string; definition: string }[] = [
   { table: "contacts", column: "local_name", definition: "TEXT" },
+  { table: "sync_state", column: "last_synced_id", definition: "TEXT" },
+  { table: "contacts", column: "username", definition: "TEXT" },
 ];
 
 /**
@@ -119,6 +124,19 @@ export const SELECT_CHAT_MESSAGES = `
 SELECT * FROM (
   SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?
 ) ORDER BY created_at ASC`;
+
+/**
+ * Курсор синхронизации: время и id последнего разобранного сообщения.
+ *
+ * Время двигается только вперёд (MAX): страницы истории и живые сообщения могут
+ * наложиться, а откатившийся курсор означал бы повторную загрузку уже
+ * разобранного. id пишем вместе со временем — иначе пара разъехалась бы.
+ */
+export const UPSERT_SYNC_STATE = `
+INSERT INTO sync_state (chat_id, last_synced_ts, last_synced_id) VALUES (?, ?, ?)
+ON CONFLICT(chat_id) DO UPDATE SET
+  last_synced_ts = MAX(last_synced_ts, excluded.last_synced_ts),
+  last_synced_id = CASE WHEN excluded.last_synced_ts >= last_synced_ts THEN excluded.last_synced_id ELSE last_synced_id END`;
 
 /** Непрочитанные входящие конкретного чата: их id нужны для квитанций. */
 export const SELECT_CHAT_UNREAD = `

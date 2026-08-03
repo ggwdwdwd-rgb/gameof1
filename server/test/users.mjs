@@ -131,6 +131,11 @@ check("второй по времени главным не становится
 
 // ── Новая пустая система ────────────────────────────────────────────────────
 db.prepare("DELETE FROM messages").run();
+// Связи контактов чистим первыми: таблица contacts появилась вместе с
+// аккаунтами и ссылается на users, а внешние ключи в базе включены — без этого
+// удаление участников падало с FOREIGN KEY constraint failed.
+db.prepare("DELETE FROM contacts").run();
+db.prepare("DELETE FROM devices").run();
 db.prepare("DELETE FROM users").run();
 const freshId = randomUUID();
 insertUser.run(freshId, "первый в новой системе", 5000);

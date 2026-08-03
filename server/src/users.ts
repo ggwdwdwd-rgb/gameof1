@@ -10,6 +10,8 @@ export interface UserSummary {
 }
 
 export interface RemovedUserStats {
+  /** Сколько связей в списках контактов пришлось убрать (в обе стороны). */
+  contacts: number;
   receipts: number;
   messages: number;
   keys: number;
@@ -128,6 +130,12 @@ export const removeUser = db.transaction((userId: string): RemovedUserStats => {
   // Коды одноразовые, хранить их историю смысла нет.
   const invites = db.prepare("DELETE FROM invites WHERE created_by = ? OR used_by = ?").run(userId, userId).changes;
   const devices = db.prepare("DELETE FROM devices WHERE user_id = ?").run(userId).changes;
+  // Связи в обе стороны: и его контакты, и он в чужих списках. Без этого
+  // удаление падало с FOREIGN KEY constraint failed — внешние ключи в базе
+  // включены, а таблица contacts появилась позже этой функции.
+  const contacts = db
+    .prepare("DELETE FROM contacts WHERE owner_id = ? OR contact_id = ?")
+    .run(userId, userId).changes;
   db.prepare("DELETE FROM users WHERE id = ?").run(userId);
-  return { receipts, messages, keys, invites, devices };
+  return { receipts, messages, keys, invites, devices, contacts };
 });

@@ -203,8 +203,21 @@ export class WsClient {
     return this.rawSend(this.ws, "invite.create", ttlHours ? { ttlHours } : {});
   }
 
-  fetchHistory(chatId: string, sinceTs: number): void {
-    if (this.ws) this.rawSend(this.ws, "history.fetch", { chatId, sinceTs, limit: HISTORY_PAGE_LIMIT });
+  /**
+   * Запрос истории с курсора.
+   *
+   * Курсор — пара (время, id). Одного времени не хватало: сообщения из одной
+   * пачки попадают в одну миллисекунду, и если такая группа разрывалась границей
+   * страницы, остаток терялся молча (см. UPSERT_SYNC_STATE).
+   */
+  fetchHistory(chatId: string, since: { ts: number; id: string | null }): void {
+    if (!this.ws) return;
+    this.rawSend(this.ws, "history.fetch", {
+      chatId,
+      sinceTs: since.ts,
+      ...(since.id === null ? {} : { sinceId: since.id }),
+      limit: HISTORY_PAGE_LIMIT,
+    });
   }
 
   deleteMessage(msgId: string, chatId: string): void {

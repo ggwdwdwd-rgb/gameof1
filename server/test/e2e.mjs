@@ -376,7 +376,7 @@ for (let i = 0; i < PAGE + EXTRA; i += 1) {
   });
 }
 // Ждём подтверждения последнего: пока сервер не записал всё, история неполна.
-await new Promise((r) => setTimeout(r, 1200));
+await new Promise((r) => setTimeout(r, 2500));
 
 bob2.received = bob2.received.filter((m) => m.type !== "history.page");
 bob2.send("history.fetch", { chatId, sinceTs: 0, limit: PAGE });
@@ -387,12 +387,18 @@ check(
   firstPage.payload.messages.every((m, i) => i === 0 || m.ts >= firstPage.payload.messages[i - 1].ts),
 );
 
-const lastTs = firstPage.payload.messages.at(-1).ts;
+const lastMessage = firstPage.payload.messages.at(-1);
+const lastTs = lastMessage.ts;
 bob2.received = bob2.received.filter((m) => m.type !== "history.page");
-bob2.send("history.fetch", { chatId, sinceTs: lastTs, limit: PAGE });
+// Курсор — пара (время, id): без id сообщения, попавшие в ту же миллисекунду,
+// что и последнее на странице, терялись бы на границе.
+bob2.send("history.fetch", { chatId, sinceTs: lastTs, sinceId: lastMessage.msgId, limit: PAGE });
 const secondPage = await bob2.wait("history.page");
 check("продолжение истории приходит", secondPage.payload.messages.length > 0, String(secondPage.payload.messages.length));
-check("продолжение строго новее курсора", secondPage.payload.messages.every((m) => m.ts > lastTs));
+check(
+  "продолжение строго после курсора",
+  secondPage.payload.messages.every((m) => m.ts > lastTs || (m.ts === lastTs && m.msgId > lastMessage.msgId)),
+);
 const firstIds = new Set(firstPage.payload.messages.map((m) => m.msgId));
 check(
   "страницы не пересекаются",
@@ -476,6 +482,25 @@ alice.send("device.revoke", { deviceId: "нет-такого", revoked: true });
 const noDevice = await alice.wait("error", (m) => m.payload.code === "NO_SUCH_DEVICE");
 check("несуществующее устройство отозвать нельзя", noDevice.payload.code === "NO_SUCH_DEVICE");
 
+// Свидетель знакомится с Бобом ДО отзыва: добавить в контакты человека, у
+// которого не осталось действующих устройств, нельзя — шифровать было бы нечем.
+const witnessCode = await (async () => {
+  alice.send("invite.create", {});
+  alice.received = alice.received.filter((m) => m.type !== "invite.created");
+  return (await alice.wait("invite.created")).payload.code;
+})();
+const witness = new Client("Свидетель");
+await witness.open();
+await witness.redeem(witnessCode);
+await witness.wait("roster.snapshot");
+// Список участников теперь у каждого свой: свидетель вошёл по коду Алисы и
+// контактом Боба не является. Чтобы Боб появился у него в списке, его надо
+// добавить — как это и делает человек в приложении.
+witness.send("contact.add", { userId: bob.userId });
+await witness.wait("contact.added", (m) => m.payload.user.userId === bob.userId);
+witness.ws.close();
+await new Promise((r) => setTimeout(r, 300));
+
 alice.send("device.revoke", { deviceId: bob.deviceId, revoked: true });
 const revoked = await alice.wait("member.revoked", (m) => m.payload.deviceId === bob.deviceId);
 check("админ отзывает доступ, остальные получают member.revoked", revoked.payload.revoked === true);
@@ -513,15 +538,17 @@ revokedLogin.ws.close();
 // Клиент удаляет участников, которых в roster нет, вместе с перепиской — если
 // сервер скрывал бы отозванных, отзыв одного телефона стирал бы переписку с
 // этим человеком у всех остальных.
-const witnessCode = await (async () => {
-  alice.send("invite.create", {});
-  alice.received = alice.received.filter((m) => m.type !== "invite.created");
-  return (await alice.wait("invite.created")).payload.code;
-})();
-const witness = new Client("Свидетель");
-await witness.open();
-await witness.redeem(witnessCode);
-const witnessRoster = await witness.wait("roster.snapshot");
+// Главное свойство: отозванное устройство остаётся в roster с признаком.
+// Клиент удаляет участников, которых в roster нет, вместе с перепиской — если
+// сервер скрывал бы отозванных, отзыв одного телефона стирал бы переписку с
+// этим человеком у всех остальных.
+const witness2 = new Client("Свидетель");
+witness2.deviceId = witness.deviceId;
+witness2.identity = witness.identity;
+witness2.encryption = witness.encryption;
+await witness2.open();
+await witness2.authenticate();
+const witnessRoster = await witness2.wait("roster.snapshot");
 const bobInRoster = witnessRoster.payload.members.find((m) => m.deviceId === bob.deviceId);
 check("отозванное устройство остаётся в roster", Boolean(bobInRoster));
 check("в roster у него признак revoked", bobInRoster?.revoked === true, JSON.stringify(bobInRoster?.revoked));
@@ -533,7 +560,7 @@ check(
   "ключи отозванного устройства сохраняются (иначе его сообщения не расшифровать)",
   bobInRoster?.encryptionPublicKey === bob.encryption.publicKey,
 );
-witness.ws.close();
+witness2.ws.close();
 
 // Отзыв обратим — иначе он был бы просто удалением с лишним шагом.
 alice.received = alice.received.filter((m) => m.type !== "member.revoked");

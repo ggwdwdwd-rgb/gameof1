@@ -7,15 +7,22 @@ interface InviteRow {
   code: string;
   expires_at: number;
   used_at: number | null;
+  created_by: string | null;
 }
 
 export type InviteRedeemResult =
-  | { ok: true; userId: string }
+  /**
+   * invitedBy — кто выпустил код. С появлением аккаунтов «участники» перестали
+   * быть общим множеством, поэтому вошедший по коду становится контактом именно
+   * пригласившего: это и есть смысл приглашения. Раньше он попадал в общий
+   * roster и его видели все.
+   */
+  | { ok: true; userId: string; invitedBy: string | null }
   | { ok: false; code: "NOT_FOUND" | "EXPIRED" | "USED" };
 
 export function handleInviteRedeem(payload: InviteRedeemPayload): InviteRedeemResult {
   const invite = db
-    .prepare("SELECT code, expires_at, used_at FROM invites WHERE code = ?")
+    .prepare("SELECT code, expires_at, used_at, created_by FROM invites WHERE code = ?")
     .get(payload.code) as InviteRow | undefined;
 
   if (!invite) return { ok: false, code: "NOT_FOUND" };
@@ -43,5 +50,5 @@ export function handleInviteRedeem(payload: InviteRedeemPayload): InviteRedeemRe
   // его было бы нечем, кроме правки базы руками.
   grantAdminIfNobodyHasIt(userId);
 
-  return { ok: true, userId };
+  return { ok: true, userId, invitedBy: invite.created_by };
 }
