@@ -263,13 +263,52 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
             socket,
             envelope("roster.snapshot", { members: getContactsFor(result.account.userId, payload.deviceId) }),
           );
+          // Прежний телефон отключаем сразу: доступ у него отозван, и оставлять
+          // ему живое соединение значило бы продолжать слать туда пакеты.
+          if (result.revokedDeviceIds.length > 0) {
+            closeDevices(result.revokedDeviceIds, "вход выполнен на другом устройстве");
+          }
+          /**
+           * Контактам рассылаем НОВЫЕ ключи устройства.
+           *
+           * Это обязательная часть входа, а не уведомление: сообщение шифруется
+           * под X25519-ключ конкретного устройства, и пока у отправителя лежит
+           * ключ прежнего телефона, всё написанное новому телефону расшифровать
+           * нечем. Без этой рассылки «вход с нового телефона» выглядел бы как
+           * «сообщения приходят, но не читаются» — до случайного переподключения
+           * отправителя, который получил бы свежий roster.snapshot.
+           *
+           * Пакет тот же member.joined: клиент по нему перезаписывает контакт
+           * целиком, вместе с deviceId и ключами.
+           */
+          broadcastToUsers(
+            contactIdsOf(result.account.userId),
+            envelope("member.joined", {
+              userId: result.account.userId,
+              deviceId: payload.deviceId,
+              displayName: result.account.displayName,
+              username: result.account.username,
+              identityPublicKey: payload.identityPublicKey,
+              encryptionPublicKey: payload.encryptionPublicKey,
+              joinedAt: Date.now(),
+              // Признак обязателен именно здесь: клиент при его отсутствии
+              // оставляет прежнее значение, и человек, чей телефон когда-то
+              // отзывали, навсегда остался бы у контактов «отозванным» — то
+              // есть с чатом только для чтения, хотя он уже вошёл заново.
+              revoked: false,
+            }),
+            payload.deviceId,
+          );
           // Контактам сообщаем, что человек в сети: для них он не новый.
           broadcastToUsers(
             contactIdsOf(result.account.userId),
             envelope("presence", { userId: result.account.userId, online: true, lastSeenAt: null }),
             payload.deviceId,
           );
-          log.info({ userId: result.account.userId }, "вход по почте, устройство привязано");
+          log.info(
+            { userId: result.account.userId, revoked: result.revokedDeviceIds.length },
+            "вход по почте, устройство привязано",
+          );
           return;
         }
 

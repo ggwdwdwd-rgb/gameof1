@@ -312,11 +312,23 @@ docker compose up -d --build
 
 Данные (`./data/server.db`) не затрагиваются — volume отдельно от образа.
 
-## 10. Бэкап (кратко; подробно — docs/OPERATIONS.md в Этапе 7)
+## 10. Бэкап (кратко; подробно — docs/OPERATIONS.md)
 
 ```bash
-cp data/server.db data/server.db.bak-$(date +%Y%m%d)
+docker compose exec server node -e "
+  const db = require('better-sqlite3')('/app/data/server.db');
+  db.exec(\"VACUUM INTO '/app/data/backup-\" + new Date().toISOString().slice(0,10) + \".db'\");
+"
 ```
+
+Именно так, а не `cp`: база работает в режиме WAL, и обычная копия под нагрузкой
+получается либо «в прошлом», либо нечитаемой. Расписание, проверка копии,
+восстановление и что делать с потерянным телефоном — docs/OPERATIONS.md.
+
+И сразу важное, чтобы не было неожиданностей: этот бэкап **не** возвращает
+переписку. У сервера её нет в читаемом виде, только шифротекст. Переписку
+возвращает резервная копия, которую делает сам человек в настройках приложения
+(ARCHITECTURE.md §2.7).
 
 ## Если EAS/Expo вообще недоступен и нужен локальный билд APK
 

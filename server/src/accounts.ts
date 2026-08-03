@@ -207,7 +207,16 @@ export interface LoginInput {
 }
 
 export type LoginResult =
-  | { ok: true; account: Account }
+  | {
+      ok: true;
+      account: Account;
+      /**
+       * Прежние устройства этого же аккаунта, у которых вход отобрал доступ
+       * (см. ARCHITECTURE.md §2.4 — одно активное устройство на человека).
+       * Их соединения надо разорвать, иначе они продолжат получать пакеты.
+       */
+      revokedDeviceIds: string[];
+    }
   /** Одна причина на «нет такой почты» и «неверный пароль» — см. комментарий. */
   | { ok: false; code: "BAD_CREDENTIALS" | "NO_PASSWORD" };
 
@@ -238,7 +247,37 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     return { ok: false, code: "BAD_CREDENTIALS" };
   }
 
+  const bound = bindDevice(found.userId, input);
+  const account = accountOf(found.userId);
+  if (!account) return { ok: false, code: "BAD_CREDENTIALS" };
+  return { ok: true, account: { ...account, isAdmin: isAdmin(found.userId) }, revokedDeviceIds: bound };
+}
+
+/**
+ * Привязка устройства к аккаунту при входе — и отзыв прежних.
+ *
+ * Одно активное устройство на человека (ARCHITECTURE.md §2.4): сообщение
+ * шифруется под конкретный X25519-ключ устройства, и пока их два, отправитель
+ * всё равно выбирает одно. Оставлять прежний телефон активным было бы хуже, чем
+ * бесполезно: половина пакетов уходила бы туда, где их не ждут, а человек,
+ * переехавший на новый телефон, видел бы, что часть сообщений не приходит.
+ *
+ * Транзакция целиком: отзыв прежних и привязка нового — одно решение, и
+ * состояние «оба отозваны» или «оба активны» недопустимо.
+ */
+const bindDevice = db.transaction((userId: string, input: LoginInput): string[] => {
   const now = Date.now();
+
+  const previous = db
+    .prepare("SELECT id FROM devices WHERE user_id = ? AND id != ? AND revoked_at IS NULL")
+    .all(userId, input.deviceId) as { id: string }[];
+  if (previous.length > 0) {
+    db.prepare(
+      `UPDATE devices SET revoked_at = ?
+       WHERE user_id = ? AND id != ? AND revoked_at IS NULL`,
+    ).run(now, userId, input.deviceId);
+  }
+
   // Устройство могло входить раньше: тогда обновляем ключи и снимаем отзыв,
   // сделанный этим же человеком. Повторный вход по паролю — законный способ
   // вернуть себе доступ.
@@ -249,12 +288,10 @@ export async function login(input: LoginInput): Promise<LoginResult> {
        identity_public_key = excluded.identity_public_key,
        encryption_public_key = excluded.encryption_public_key,
        revoked_at = NULL`,
-  ).run(input.deviceId, found.userId, input.identityPublicKey, input.encryptionPublicKey, now);
+  ).run(input.deviceId, userId, input.identityPublicKey, input.encryptionPublicKey, now);
 
-  const account = accountOf(found.userId);
-  if (!account) return { ok: false, code: "BAD_CREDENTIALS" };
-  return { ok: true, account: { ...account, isAdmin: isAdmin(found.userId) } };
-}
+  return previous.map((row) => row.id);
+});
 
 /**
  * Хэш несуществующего пароля — чтобы отказ по неизвестной почте стоил столько

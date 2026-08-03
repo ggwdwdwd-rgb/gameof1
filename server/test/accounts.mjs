@@ -276,6 +276,35 @@ check(
 );
 check("в контакте есть @тег", roster2.payload.members.find((m) => m.userId === alice.userId)?.username === alice.username);
 
+// Ключи нового телефона обязаны дойти до контактов. Сообщение шифруется под
+// X25519-ключ конкретного устройства: пока у Алисы лежит ключ прежнего телефона
+// Боба, всё написанное новому телефону расшифровать нечем, и «вход с нового
+// телефона» выглядит как «сообщения приходят, но не читаются».
+const rebound = await alice.wait("member.joined", (m) => m.payload.userId === bob.userId);
+check("контакту приходят ключи нового устройства", rebound.payload.deviceId === bobPhone2.deviceId);
+check(
+  "и это именно новый ключ шифрования",
+  rebound.payload.encryptionPublicKey === bobPhone2.encryption.publicKey,
+);
+check("новое устройство приходит не отозванным", rebound.payload.revoked === false);
+
+// Прежний телефон обязан отключиться: одно активное устройство на человека
+// (ARCHITECTURE.md §2.4). Иначе половина пакетов уходила бы туда, где их не ждут.
+await new Promise((resolve) => (bob.ws.readyState === 3 ? resolve() : bob.ws.once("close", resolve)));
+check("прежний телефон отключён после входа на новом", bob.ws.readyState === 3, `readyState=${bob.ws.readyState}`);
+
+const bobPhone3 = new Client("Боб-прежний");
+bobPhone3.deviceId = bob.deviceId;
+bobPhone3.identity = bob.identity;
+await bobPhone3.open();
+bobPhone3.send("auth.response", {
+  deviceId: bob.deviceId,
+  signature: crypto.signDetached((await bobPhone3.wait("auth.challenge")).payload.nonce, bob.identity.secretKey),
+});
+const refused = await bobPhone3.wait("auth.error");
+check("прежнее устройство больше не входит", refused.payload.code === "REVOKED", JSON.stringify(refused.payload));
+bobPhone3.ws.close();
+
 bobPhone2.received = [];
 bobPhone2.send("auth.login", { email: bob.email, password: "неверный-пароль", ...bobPhone2.keys() });
 // Соединение уже аутентифицировано, поэтому повторный логин — неизвестный тип.
