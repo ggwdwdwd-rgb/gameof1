@@ -40,10 +40,54 @@ export interface InviteRedeemErrorPayload {
   code: "NOT_FOUND" | "EXPIRED" | "USED";
 }
 
+/** Ответ на регистрацию и на вход по почте: карточка своего аккаунта. */
+export interface AccountOkPayload {
+  userId: string;
+  username: string | null;
+  displayName: string;
+  isAdmin?: boolean;
+  serverTime?: number;
+}
+
+/** Отказ в регистрации или входе. message приходит от сервера готовым. */
+export interface AccountErrorPayload {
+  code: string;
+  message: string;
+}
+
+/** Результат поиска: ровно один человек либо ничего. */
+export interface UserFoundPayload {
+  user: {
+    userId: string;
+    displayName: string;
+    username: string | null;
+    identityPublicKey: string;
+    encryptionPublicKey: string;
+  } | null;
+}
+
+/** Контакт добавлен — приходит и добавившему, и добавленному: связь взаимная. */
+export interface ContactAddedPayload {
+  user: {
+    userId: string;
+    displayName: string;
+    username: string | null;
+    identityPublicKey: string;
+    encryptionPublicKey: string;
+  };
+  online?: boolean;
+}
+
+export interface UsernameOkPayload {
+  username: string | null;
+}
+
 export interface RosterMemberPayload {
   userId: string;
   deviceId: string;
   displayName: string;
+  /** @тег: по нему человека находят. null — аккаунт заведён до появления тегов. */
+  username?: string | null;
   /** Есть ли у участника открытое соединение прямо сейчас. */
   online?: boolean;
   /** Когда он был на связи последний раз. */
@@ -132,10 +176,11 @@ export interface PresencePayload {
   lastSeenAt: number | null;
 }
 
-/** Сервер рассылает всем, когда участник сменил имя. */
+/** Сервер рассылает контактам, когда участник сменил имя или @тег. */
 export interface MemberUpdatedPayload {
   userId: string;
   displayName: string;
+  username?: string | null;
 }
 
 /** Участника удалили из системы — его чат и переписку нужно убрать локально. */

@@ -4,7 +4,12 @@ import { Emitter } from "../util/emitter";
 import { uuidv4 } from "../util/uuid";
 import {
   isEnvelope,
+  type AccountErrorPayload,
+  type AccountOkPayload,
   type AuthChallengePayload,
+  type ContactAddedPayload,
+  type UserFoundPayload,
+  type UsernameOkPayload,
   type AuthErrorPayload,
   type AuthOkPayload,
   type ErrorPayload,
@@ -39,8 +44,35 @@ export type ConnectionFailure =
   /** Приложение не смогло инициализироваться — соединение даже не начиналось. */
   | { kind: "fatal"; detail: string };
 
+/**
+ * Как это соединение представляется серверу.
+ *
+ * `device` — обычная работа: подпись челленджа ключом устройства. Остальные три
+ * режима одноразовые, для короткоживущего клиента на экране входа: после успеха
+ * приложение сохраняет identity и подключается уже как `device`. Пароль поэтому
+ * не хранится и не уходит на сервер при каждом переподключении.
+ */
 export type AuthMode =
   | { kind: "device"; deviceId: string; identitySecretKey: string }
+  | {
+      kind: "register";
+      email: string;
+      password: string;
+      username: string;
+      displayName: string;
+      phone?: string | undefined;
+      deviceId: string;
+      identityPublicKey: string;
+      encryptionPublicKey: string;
+    }
+  | {
+      kind: "login";
+      email: string;
+      password: string;
+      deviceId: string;
+      identityPublicKey: string;
+      encryptionPublicKey: string;
+    }
   | {
       kind: "invite";
       code: string;
@@ -58,6 +90,11 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   inviteOk: (payload: InviteRedeemOkPayload) => void;
   inviteError: (payload: InviteRedeemErrorPayload) => void;
   inviteCreated: (payload: InviteCreatedPayload) => void;
+  accountOk: (payload: AccountOkPayload) => void;
+  accountError: (payload: AccountErrorPayload) => void;
+  userFound: (payload: UserFoundPayload) => void;
+  contactAdded: (payload: ContactAddedPayload) => void;
+  usernameOk: (payload: UsernameOkPayload) => void;
   roster: (payload: RosterSnapshotPayload) => void;
   memberJoined: (payload: MemberJoinedPayload) => void;
   memberUpdated: (payload: MemberUpdatedPayload) => void;
@@ -197,6 +234,24 @@ export class WsClient {
     this.rawSend(this.ws, "typing", { chatId, isTyping });
   }
 
+  /** Поиск человека по @тегу, почте или телефону — только точное совпадение. */
+  searchUser(query: string): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "user.search", { query });
+  }
+
+  /** Добавление найденного человека в контакты (связь сразу взаимная). */
+  addContact(userId: string): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "contact.add", { userId });
+  }
+
+  /** Смена своего @тега. */
+  setUsername(username: string): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "username.set", { username });
+  }
+
   /** false, если пакет не удалось отправить (нет открытого соединения). */
   requestInvite(ttlHours?: number): boolean {
     if (!this.ws) return false;
@@ -262,6 +317,29 @@ export class WsClient {
       case "invite.created":
         this.events.emit("inviteCreated", parsed.payload as InviteCreatedPayload);
         return;
+      // Регистрация и вход отвечают разными типами, но экрану входа важен один
+      // исход на оба: получилось или нет.
+      case "auth.register.ok":
+      case "auth.login.ok":
+        this.onAuthenticated();
+        this.events.emit("accountOk", parsed.payload as AccountOkPayload);
+        return;
+      case "auth.register.error":
+      case "auth.login.error": {
+        const payload = parsed.payload as AccountErrorPayload;
+        this.setFailure({ kind: "auth", code: payload.code });
+        this.events.emit("accountError", payload);
+        return;
+      }
+      case "user.found":
+        this.events.emit("userFound", parsed.payload as UserFoundPayload);
+        return;
+      case "contact.added":
+        this.events.emit("contactAdded", parsed.payload as ContactAddedPayload);
+        return;
+      case "username.ok":
+        this.events.emit("usernameOk", parsed.payload as UsernameOkPayload);
+        return;
       case "roster.snapshot":
         this.events.emit("roster", parsed.payload as RosterSnapshotPayload);
         return;
@@ -322,19 +400,47 @@ export class WsClient {
   private async respondToChallenge(nonceB64: string): Promise<void> {
     const ws = this.ws;
     if (!ws) return;
-    if (this.authMode.kind === "device") {
+    const mode = this.authMode;
+
+    if (mode.kind === "device") {
       const crypto = await getCrypto();
-      const signature = crypto.signDetached(nonceB64, this.authMode.identitySecretKey);
-      this.rawSend(ws, "auth.response", { deviceId: this.authMode.deviceId, signature });
-    } else {
-      this.rawSend(ws, "invite.redeem", {
-        code: this.authMode.code,
-        deviceId: this.authMode.deviceId,
-        displayName: this.authMode.displayName,
-        identityPublicKey: this.authMode.identityPublicKey,
-        encryptionPublicKey: this.authMode.encryptionPublicKey,
-      });
+      const signature = crypto.signDetached(nonceB64, mode.identitySecretKey);
+      this.rawSend(ws, "auth.response", { deviceId: mode.deviceId, signature });
+      return;
     }
+
+    if (mode.kind === "register") {
+      this.rawSend(ws, "auth.register", {
+        email: mode.email,
+        password: mode.password,
+        username: mode.username,
+        displayName: mode.displayName,
+        ...(mode.phone === undefined || mode.phone === "" ? {} : { phone: mode.phone }),
+        deviceId: mode.deviceId,
+        identityPublicKey: mode.identityPublicKey,
+        encryptionPublicKey: mode.encryptionPublicKey,
+      });
+      return;
+    }
+
+    if (mode.kind === "login") {
+      this.rawSend(ws, "auth.login", {
+        email: mode.email,
+        password: mode.password,
+        deviceId: mode.deviceId,
+        identityPublicKey: mode.identityPublicKey,
+        encryptionPublicKey: mode.encryptionPublicKey,
+      });
+      return;
+    }
+
+    this.rawSend(ws, "invite.redeem", {
+      code: mode.code,
+      deviceId: mode.deviceId,
+      displayName: mode.displayName,
+      identityPublicKey: mode.identityPublicKey,
+      encryptionPublicKey: mode.encryptionPublicKey,
+    });
   }
 
   /** true, если соединение реально открыто и в него можно писать. */

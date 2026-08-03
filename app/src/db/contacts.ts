@@ -6,6 +6,8 @@ export interface Contact {
   deviceId: string;
   /** Имя, которое задал сам человек (приходит в roster). */
   displayName: string;
+  /** @тег: по нему человека нашли. null — аккаунт без тега. */
+  username: string | null;
   /** Своё название этого контакта; null — используется displayName. */
   localName: string | null;
   identityPublicKey: string;
@@ -18,6 +20,7 @@ interface ContactRow {
   user_id: string;
   device_id: string;
   display_name: string;
+  username: string | null;
   identity_public_key: string;
   encryption_public_key: string;
   fingerprint: string;
@@ -30,6 +33,7 @@ function fromRow(row: ContactRow): Contact {
     userId: row.user_id,
     deviceId: row.device_id,
     displayName: row.display_name,
+    username: row.username,
     localName: row.local_name,
     identityPublicKey: row.identity_public_key,
     encryptionPublicKey: row.encryption_public_key,
@@ -41,11 +45,12 @@ function fromRow(row: ContactRow): Contact {
 export async function upsertContact(contact: Contact): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    `INSERT INTO contacts (user_id, device_id, display_name, identity_public_key, encryption_public_key, fingerprint, is_revoked)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO contacts (user_id, device_id, display_name, username, identity_public_key, encryption_public_key, fingerprint, is_revoked)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET
        device_id = excluded.device_id,
        display_name = excluded.display_name,
+       username = excluded.username,
        identity_public_key = excluded.identity_public_key,
        encryption_public_key = excluded.encryption_public_key,
        fingerprint = excluded.fingerprint,
@@ -54,6 +59,7 @@ export async function upsertContact(contact: Contact): Promise<void> {
       contact.userId,
       contact.deviceId,
       contact.displayName,
+      contact.username,
       contact.identityPublicKey,
       contact.encryptionPublicKey,
       contact.fingerprint,

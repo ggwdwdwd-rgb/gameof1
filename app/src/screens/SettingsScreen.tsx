@@ -104,6 +104,7 @@ export function SettingsScreen({
     connectionFailure,
     reconnect,
     displayName,
+    username,
     notificationsEnabled,
     setNotificationsEnabled,
     renameSelf,
@@ -430,6 +431,11 @@ export function SettingsScreen({
               <Text style={[styles.profileName, { color: theme.colors.textPrimary }]}>{displayName}</Text>
               <Icon name="edit" size={17} color={theme.colors.textMuted} />
             </Pressable>
+          )}
+
+          {/* Свой @тег под именем: его дают другим, чтобы нашли. */}
+          {username !== null && (
+            <Text style={[styles.profileTag, { color: theme.colors.textMuted }]}>@{username}</Text>
           )}
 
           <View style={styles.profileStatus}>
@@ -878,6 +884,7 @@ const styles = StyleSheet.create({
   nameActions: { flexDirection: "row", justifyContent: "center", gap: 18, marginTop: 10 },
   nameAction: { paddingVertical: 8, paddingHorizontal: 12, minWidth: 90, alignItems: "center" },
   nameActionText: { fontSize: 15, fontWeight: "600" },
+  profileTag: { fontSize: 14, marginTop: 5 },
   profileStatus: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 5 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   profileStatusText: { fontSize: 13.5 },

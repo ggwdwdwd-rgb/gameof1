@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS contacts (
   user_id               TEXT PRIMARY KEY,
   device_id             TEXT NOT NULL,
   display_name          TEXT NOT NULL,
+  -- @тег участника: по нему его нашли. NULL — аккаунт без тега (заведён по
+  -- одноразовому коду, до появления аккаунтов).
+  username              TEXT,
   identity_public_key   TEXT NOT NULL,
   encryption_public_key TEXT NOT NULL,
   fingerprint           TEXT NOT NULL,

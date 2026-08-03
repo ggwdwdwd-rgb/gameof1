@@ -11,6 +11,15 @@ export interface DeviceIdentity {
   userId: string;
   deviceId: string;
   displayName: string;
+  /**
+   * Свой @тег — по нему человека находят другие.
+   *
+   * Может отсутствовать: аккаунты появились позже, и у тех, кто регистрировался
+   * по одноразовому коду, тега нет, пока они его не зададут.
+   */
+  username?: string | null;
+  /** Почта, которой человек входит. Нужна только чтобы показать её в настройках. */
+  email?: string | null;
   serverUrl: string;
   identityPublicKey: string;
   identitySecretKey: string;

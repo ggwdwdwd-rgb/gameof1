@@ -4,11 +4,11 @@ import { ActivityIndicator, BackHandler, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppProvider } from "./src/context/AppContext";
 import { useAppLock } from "./src/lock/useAppLock";
-import { AddPersonScreen } from "./src/screens/AddPersonScreen";
+import { AuthScreen } from "./src/screens/AuthScreen";
+import { ContactsScreen } from "./src/screens/ContactsScreen";
 import { ChatListScreen } from "./src/screens/ChatListScreen";
 import { ChatScreen } from "./src/screens/ChatScreen";
 import { LockScreen } from "./src/screens/LockScreen";
-import { OnboardingScreen } from "./src/screens/OnboardingScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { loadIdentity, type DeviceIdentity } from "./src/storage/identity";
 import { ThemeProvider, useTheme } from "./src/theme/ThemeContext";
@@ -20,7 +20,7 @@ type Screen =
   | { name: "chatList" }
   | { name: "chat"; chatId: string; title: string; peerUserId: string }
   | { name: "settings" }
-  | { name: "addPerson" };
+  | { name: "contacts" };
 
 function Root(): React.ReactElement {
   const theme = useTheme();
@@ -89,7 +89,10 @@ function Root(): React.ReactElement {
   if (!identity) {
     return (
       <>
-        <OnboardingScreen onComplete={setIdentity} />
+        {/* Вход и регистрация по почте вместо прежнего онбординга по коду.
+            Экран инвайтов убран из основного пути: людей теперь находят по
+            @тегу, а не приглашают одноразовым кодом. */}
+        <AuthScreen onComplete={setIdentity} />
         <StatusBar style={theme.colors.statusBar} />
       </>
     );
@@ -105,7 +108,7 @@ function Root(): React.ReactElement {
           <ChatListScreen
             onOpenChat={(chatId, title, peerUserId) => setScreen({ name: "chat", chatId, title, peerUserId })}
             onOpenSettings={() => setScreen({ name: "settings" })}
-            onAddPerson={() => setScreen({ name: "addPerson" })}
+            onAddPerson={() => setScreen({ name: "contacts" })}
           />
         </ScreenTransition>
       )}
@@ -124,9 +127,12 @@ function Root(): React.ReactElement {
           <SettingsScreen onBack={() => setScreen({ name: "chatList" })} onLockChanged={lock.reload} />
         </ScreenTransition>
       )}
-      {screen.name === "addPerson" && (
-        <ScreenTransition key="addPerson" from="bottom">
-          <AddPersonScreen onBack={() => setScreen({ name: "chatList" })} />
+      {screen.name === "contacts" && (
+        <ScreenTransition key="contacts" from="bottom">
+          <ContactsScreen
+            onBack={() => setScreen({ name: "chatList" })}
+            onOpenChat={(chatId, title, peerUserId) => setScreen({ name: "chat", chatId, title, peerUserId })}
+          />
         </ScreenTransition>
       )}
       {/* Экран блокировки — поверх всего, но ВНУТРИ AppProvider: соединение под

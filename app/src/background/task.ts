@@ -109,6 +109,7 @@ function holdConnection(identity: Identity, crypto: Crypto, known: Contact[]): P
           userId: member.userId,
           deviceId: member.deviceId,
           displayName: member.displayName,
+          username: member.username ?? previous?.username ?? null,
           // localName задаётся на этом устройстве и с сервера не приходит —
           // затирать его нельзя.
           localName: previous?.localName ?? null,

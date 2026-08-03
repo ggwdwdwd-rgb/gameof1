@@ -280,7 +280,7 @@ export function ChatListScreen({
             </View>
             <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}>Пока никого нет</Text>
             <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-              Создайте код приглашения и передайте его тому, с кем хотите переписываться. Всё шифруется на устройстве.
+              Найдите человека по его @тегу — или дайте ему свой, и он напишет первым. Всё шифруется на устройстве.
             </Text>
             <Pressable
               style={({ pressed }) => [
@@ -289,7 +289,7 @@ export function ChatListScreen({
               ]}
               onPress={onAddPerson}
             >
-              <Text style={[styles.emptyButtonText, { color: theme.colors.onAccent }]}>Добавить человека</Text>
+              <Text style={[styles.emptyButtonText, { color: theme.colors.onAccent }]}>Найти по тегу</Text>
             </Pressable>
           </View>
         }

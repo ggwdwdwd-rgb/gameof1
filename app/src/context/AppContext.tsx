@@ -129,6 +129,8 @@ interface AppContextData {
   notificationsEnabled: boolean;
   /** Имя, которым участника видят остальные (может измениться без перезапуска). */
   displayName: string;
+  /** Свой @тег — его показывают, чтобы человек мог им поделиться. */
+  username: string | null;
   /**
    * Можно ли распоряжаться составом. Приходит от сервера (первый
    * зарегистрированный участник) — клиент только показывает кнопку.
@@ -172,8 +174,23 @@ interface AppActions {
   removeMember: (userId: string) => Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Отзыв и возврат доступа устройства (потерянный телефон) — только админу. */
   revokeDevice: (userId: string, revoked: boolean) => Promise<{ ok: true } | { ok: false; detail: string }>;
+  /** Поиск человека по @тегу, почте или телефону. null — никого не нашли. */
+  findUser: (query: string) => Promise<FoundUser | null>;
+  /** Добавление найденного человека в контакты (связь сразу взаимная). */
+  addContact: (user: FoundUser) => Promise<{ ok: true } | { ok: false; detail: string }>;
+  /** Смена своего @тега. */
+  changeUsername: (username: string) => Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Самопроверка отправки по шагам — см. runSelfTest. */
   selfTest: () => Promise<SelfTestStep[]>;
+}
+
+/** Найденный по тегу человек — то, что нужно, чтобы его добавить. */
+export interface FoundUser {
+  userId: string;
+  displayName: string;
+  username: string | null;
+  identityPublicKey: string;
+  encryptionPublicKey: string;
 }
 
 /** Один шаг самопроверки: что проверяли, получилось ли и подробности. */
@@ -199,6 +216,8 @@ function contactFromRoster(crypto: Crypto, member: RosterMemberPayload, previous
     userId: member.userId,
     deviceId: member.deviceId,
     displayName: member.displayName,
+    // Тег может не прийти (старый сервер) — прежний тогда важнее пустоты.
+    username: member.username ?? previous?.username ?? null,
     localName: previous?.localName ?? null,
     identityPublicKey: member.identityPublicKey,
     encryptionPublicKey: member.encryptionPublicKey,
@@ -229,6 +248,8 @@ export function AppProvider({
   const [myFingerprint, setMyFingerprint] = useState("");
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [displayName, setDisplayName] = useState(identity.displayName);
+  /** Свой @тег: по нему тебя находят другие. */
+  const [username, setUsername] = useState<string | null>(identity.username ?? null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [backgroundEnabled, setBackgroundEnabled] = useState(false);
   /**
@@ -491,6 +512,9 @@ export function AppProvider({
           userId: existing.userId,
           deviceId: existing.deviceId,
           displayName: payload.displayName,
+          // Тег приходит вместе с именем: сервер рассылает member.updated и при
+          // его смене. undefined оставит прежний (см. contactFromRoster).
+          ...(payload.username === undefined ? {} : { username: payload.username }),
           identityPublicKey: existing.identityPublicKey,
           encryptionPublicKey: existing.encryptionPublicKey,
           joinedAt: 0,
@@ -541,6 +565,38 @@ export function AppProvider({
             });
           }
         })();
+      });
+
+      /**
+       * Нас добавили в контакты — или мы добавили сами.
+       *
+       * Приходит обеим сторонам: связь взаимная. Для того, кого добавили, это
+       * единственный способ узнать о человеке — общего списка участников больше
+       * нет, и ключи для ответа приходят именно здесь.
+       */
+      ws.events.on("contactAdded", (payload) => {
+        void upsertAndTrack({
+          userId: payload.user.userId,
+          deviceId: "",
+          displayName: payload.user.displayName,
+          username: payload.user.username,
+          identityPublicKey: payload.user.identityPublicKey,
+          encryptionPublicKey: payload.user.encryptionPublicKey,
+          joinedAt: Date.now(),
+        })
+          .then(() => {
+            if (payload.online === true) {
+              setPresence((prev) => new Map(prev).set(payload.user.userId, { online: true, lastSeenAt: null }));
+            }
+            // Список чатов должен обновиться сразу: новый контакт — новый чат.
+            chatEvents.emit("messageInserted", dmChatId(identity.userId, payload.user.userId));
+          })
+          .catch((error: unknown) => {
+            setConnectionFailure({
+              kind: "fatal",
+              detail: `не удалось сохранить контакт: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          });
       });
 
       ws.events.on("msgDeliver", (payload) => {
@@ -958,6 +1014,105 @@ export function AppProvider({
           }
         });
       },
+      /**
+       * Поиск человека по @тегу, почте или телефону.
+       *
+       * Сервер отвечает ровно одним результатом или ничем: поиск по части тега
+       * позволил бы собрать всех участников, а этого в системе быть не должно.
+       */
+      async findUser(query) {
+        const ws = wsRef.current;
+        const trimmed = query.trim();
+        if (trimmed.length === 0 || !ws || !(await ws.waitUntilReady(WAIT_READY_MS))) return null;
+
+        return new Promise<FoundUser | null>((resolve) => {
+          let settled = false;
+          const finish = (result: FoundUser | null): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offFound();
+            offError();
+            resolve(result);
+          };
+          const timer = setTimeout(() => finish(null), 12_000);
+          const offFound = ws.events.on("userFound", (payload) => finish(payload.user));
+          // Старый сервер не знает user.search и отвечает UNKNOWN_TYPE — без
+          // этой ветки экран ждал бы таймаут молча.
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") finish(null);
+          });
+          if (!ws.searchUser(trimmed)) finish(null);
+        });
+      },
+      async addContact(user) {
+        const ws = wsRef.current;
+        if (!ws || !(await ws.waitUntilReady(WAIT_READY_MS))) {
+          return { ok: false, detail: "нет соединения с сервером" };
+        }
+
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (result: { ok: true } | { ok: false; detail: string }): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offAdded();
+            offError();
+            resolve(result);
+          };
+          const timer = setTimeout(() => finish({ ok: false, detail: "сервер не ответил" }), 12_000);
+          const offAdded = ws.events.on("contactAdded", (payload) => {
+            if (payload.user.userId === user.userId) finish({ ok: true });
+          });
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") {
+              finish({ ok: false, detail: "сервер устарел — обновите его" });
+              return;
+            }
+            if (["CANNOT_ADD_SELF", "NO_SUCH_USER"].includes(payload.code)) {
+              finish({ ok: false, detail: payload.message });
+            }
+          });
+          if (!ws.addContact(user.userId)) finish({ ok: false, detail: "пакет не удалось отправить" });
+        });
+      },
+      async changeUsername(next) {
+        const ws = wsRef.current;
+        if (!ws || !(await ws.waitUntilReady(WAIT_READY_MS))) {
+          return { ok: false, detail: "нет соединения с сервером" };
+        }
+
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (result: { ok: true } | { ok: false; detail: string }): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offOk();
+            offError();
+            resolve(result);
+          };
+          const timer = setTimeout(() => finish({ ok: false, detail: "сервер не ответил" }), 12_000);
+          const offOk = ws.events.on("usernameOk", (payload) => {
+            setUsername(payload.username);
+            // В identity тоже: тег показывается на экране контактов ещё до
+            // подключения, из сохранённых данных.
+            void saveIdentity({ ...identity, username: payload.username });
+            finish({ ok: true });
+          });
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") {
+              finish({ ok: false, detail: "сервер устарел — обновите его" });
+              return;
+            }
+            if (["BAD_USERNAME", "USERNAME_TAKEN"].includes(payload.code)) {
+              finish({ ok: false, detail: payload.message });
+            }
+          });
+          if (!ws.setUsername(next.trim())) finish({ ok: false, detail: "пакет не удалось отправить" });
+        });
+      },
       async setNotificationsEnabled(enabled) {
         notificationsRef.current = enabled;
         setNotificationsEnabled(enabled);
@@ -1144,6 +1299,7 @@ export function AppProvider({
       myFingerprint,
       notificationsEnabled,
       displayName,
+      username,
       isAdmin,
       backgroundEnabled,
       backgroundAvailable: isBackgroundModeAvailable(),
@@ -1159,6 +1315,7 @@ export function AppProvider({
       myFingerprint,
       notificationsEnabled,
       displayName,
+      username,
       isAdmin,
       backgroundEnabled,
       actions,

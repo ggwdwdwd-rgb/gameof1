@@ -121,7 +121,11 @@ await alice.open();
 const aliceReg = await alice.register("alice");
 check("регистрация по почте и паролю", Boolean(alice.userId));
 check("сервер вернул @тег", aliceReg.payload.username === alice.username, String(aliceReg.payload.username));
-check("первый зарегистрированный — главный", aliceReg.payload.isAdmin === true, String(aliceReg.payload.isAdmin));
+// Права проверяем на факт передачи, а не на значение: база между прогонами не
+// чистится, и в непустой системе главный — кто-то из прежних аккаунтов. Что
+// первый участник ПУСТОЙ системы становится главным, проверяет test:users, где
+// база создаётся с нуля.
+check("признак прав приходит в ответе", typeof aliceReg.payload.isAdmin === "boolean", String(aliceReg.payload.isAdmin));
 
 const aliceRoster = await alice.wait("roster.snapshot");
 check(
