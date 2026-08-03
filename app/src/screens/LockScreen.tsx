@@ -100,7 +100,7 @@ export function LockScreen({
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <View style={[styles.logo, { paddingTop: insets.top + 22 }]}>
-        <LogoMark size={62} />
+        <LogoMark size={62} breathe />
       </View>
 
       <PinPad

@@ -60,6 +60,31 @@ export function useAppear(enabled: boolean = true, duration: number = DURATION.n
 }
 
 /**
+ * Короткий «подскок» на каждое увеличение числа.
+ *
+ * Нужен там, где меняется не факт, а количество: счётчик непрочитанного,
+ * который был 2 и стал 3, при обычном useTransition не шевельнётся — он ведь и
+ * до, и после «больше нуля». А человеку интересно ровно то, что число выросло.
+ */
+export function useBump(value: number): Animated.Value {
+  const anim = useRef(new Animated.Value(0)).current;
+  const previous = useRef(value);
+
+  useEffect(() => {
+    const grew = value > previous.current;
+    previous.current = value;
+    if (!grew) return;
+    anim.setValue(0);
+    Animated.sequence([
+      Animated.timing(anim, { toValue: 1, duration: 120, easing: EASE_OUT, useNativeDriver: true }),
+      Animated.timing(anim, { toValue: 0, duration: 200, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]).start();
+  }, [value, anim]);
+
+  return anim;
+}
+
+/**
  * Бесконечная пульсация — для кнопки записи.
  *
  * loop без остановки не запускаем: анимацию обязательно нужно остановить при

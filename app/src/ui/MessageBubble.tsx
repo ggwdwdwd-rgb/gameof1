@@ -9,6 +9,7 @@ import type { Theme } from "../theme/theme";
 import { Icon, type IconName } from "./Icon";
 import { LinkedText } from "./LinkedText";
 import { DURATION, useAppear } from "./motion";
+import { StatusTicks } from "./StatusTicks";
 
 /** Строка списка сообщений: само сообщение плюс всё, что вычислено заранее. */
 export interface Decorated {
@@ -24,14 +25,6 @@ export interface Decorated {
   /** Появилось уже при открытом чате — только такое и анимируем. */
   fresh: boolean;
 }
-
-const STATUS_ICONS: Record<LocalMessage["status"], IconName> = {
-  pending: "clock",
-  sent: "check",
-  delivered: "checkDouble",
-  read: "checkDouble",
-  failed: "alert",
-};
 
 function formatTime(ts: number): string {
   const date = new Date(ts);
@@ -423,11 +416,7 @@ function MessageBubbleBase({ row, mine, theme, onLongPress, onOpenImage }: Bubbl
         <View style={[styles.metaRow, isImage && styles.metaRowOnImage]}>
           <Text style={[styles.time, { color: metaColor }]}>{formatTime(message.createdAt)}</Text>
           {mine && !message.deletedAt && (
-            <Icon
-              name={STATUS_ICONS[message.status]}
-              size={15}
-              color={message.status === "read" ? theme.colors.readTick : metaColor}
-            />
+            <StatusTicks status={message.status} color={metaColor} readColor={theme.colors.readTick} size={15} />
           )}
         </View>
       </Pressable>

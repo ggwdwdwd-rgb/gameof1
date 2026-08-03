@@ -1,5 +1,5 @@
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppProvider } from "./src/context/AppContext";
@@ -14,7 +14,7 @@ import { loadIdentity, type DeviceIdentity } from "./src/storage/identity";
 import { ThemeProvider, useTheme } from "./src/theme/ThemeContext";
 import { CrashScreen, useCrashHandler } from "./src/ui/CrashScreen";
 import { LogoMark } from "./src/ui/LogoMark";
-import { ScreenTransition } from "./src/ui/ScreenTransition";
+import { Navigator, type NavDirection } from "./src/ui/Navigator";
 
 type Screen =
   | { name: "chatList" }
@@ -22,13 +22,58 @@ type Screen =
   | { name: "settings" }
   | { name: "contacts" };
 
+/**
+ * Глубина экрана в воображаемом стеке — из неё Navigator понимает, вперёд идём
+ * или назад.
+ *
+ * Настоящего стека нет: экраны подменяются условным рендером. Но направление
+ * перехода обязано совпадать с ощущением человека — «назад» должно уезжать
+ * вправо, иначе анимация врёт про то, что произошло.
+ */
+const DEPTH: Record<Screen["name"], number> = { chatList: 0, chat: 2, settings: 1, contacts: 1 };
+
+/** Контакты открываются как модальное окно — снизу: это не «глубже», а «поверх». */
+function directionFor(from: Screen["name"], to: Screen["name"]): NavDirection {
+  if (to === "contacts") return "modal";
+  if (from === "contacts") return "pop";
+  return DEPTH[to] >= DEPTH[from] ? "push" : "pop";
+}
+
+/** Ключ экрана для Navigator: у чата свой на каждого собеседника. */
+function screenKey(screen: Screen): string {
+  return screen.name === "chat" ? `chat:${screen.chatId}` : screen.name;
+}
+
 function Root(): React.ReactElement {
   const theme = useTheme();
   const [loading, setLoading] = useState(true);
   const [identity, setIdentity] = useState<DeviceIdentity | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "chatList" });
+  /**
+   * Направление последнего перехода — его считаем в момент смены экрана.
+   *
+   * Именно в момент смены, а не при отрисовке: после перехода прежний экран уже
+   * забыт, и восстановить по текущему состоянию «пришли мы сюда вперёд или
+   * назад» нечем.
+   */
+  const [direction, setDirection] = useState<NavDirection>("push");
   const { crash, clear } = useCrashHandler();
   const lock = useAppLock();
+
+  /**
+   * Имя текущего экрана отдельным рефом.
+   *
+   * Направление считаем здесь, а не внутри обновляющей функции setScreen: та
+   * обязана быть чистой, а в режиме разработки React вызывает её дважды — то
+   * есть второй setState из неё был бы вызовом с побочным эффектом на каждый
+   * переход.
+   */
+  const currentName = useRef<Screen["name"]>("chatList");
+  const go = useCallback((next: Screen) => {
+    setDirection(directionFor(currentName.current, next.name));
+    currentName.current = next.name;
+    setScreen(next);
+  }, []);
 
   useEffect(() => {
     void loadIdentity().then((stored) => {
@@ -53,11 +98,15 @@ function Root(): React.ReactElement {
   const lockedRef = useRef(false);
   lockedRef.current = lock.state === "locked";
 
+  // Тем же рефом: обработчик «назад» ставится один раз и не должен пересоздаваться.
+  const goRef = useRef(go);
+  goRef.current = go;
+
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       if (lockedRef.current) return false; // из блокировки — только выход из приложения
       if (screenRef.current.name === "chatList") return false; // из списка чатов — выход, как и ожидается
-      setScreen({ name: "chatList" });
+      goRef.current({ name: "chatList" });
       return true;
     });
     return () => subscription.remove();
@@ -79,7 +128,7 @@ function Root(): React.ReactElement {
   if (loading) {
     return (
       <View style={[styles.loading, { backgroundColor: theme.colors.background }]}>
-        <LogoMark size={82} />
+        <LogoMark size={82} breathe />
         <ActivityIndicator color={theme.colors.accent} style={styles.loadingSpinner} />
         <StatusBar style={theme.colors.statusBar} />
       </View>
@@ -100,41 +149,37 @@ function Root(): React.ReactElement {
 
   return (
     <AppProvider identity={identity}>
-      {/* key по имени экрана: он заставляет ScreenTransition пересоздаться и
-          проиграть появление на каждом переходе. Список чатов возвращается
-          слева — как будто мы вышли из экрана назад, а не открыли новый. */}
-      {screen.name === "chatList" && (
-        <ScreenTransition key="chatList" from="left">
+      {/* Один Navigator на всё: он держит уходящий экран смонтированным на
+          время перехода, поэтому тот уезжает с параллаксом, а не исчезает в
+          тот же кадр. Ключ — имя экрана (для чата ещё и id, чтобы переход между
+          двумя чатами тоже проигрывался). */}
+      <Navigator screenKey={screenKey(screen)} direction={direction}>
+        {screen.name === "chatList" && (
           <ChatListScreen
-            onOpenChat={(chatId, title, peerUserId) => setScreen({ name: "chat", chatId, title, peerUserId })}
-            onOpenSettings={() => setScreen({ name: "settings" })}
-            onAddPerson={() => setScreen({ name: "contacts" })}
+            onOpenChat={(chatId, title, peerUserId) => go({ name: "chat", chatId, title, peerUserId })}
+            onOpenSettings={() => go({ name: "settings" })}
+            onAddPerson={() => go({ name: "contacts" })}
           />
-        </ScreenTransition>
-      )}
-      {screen.name === "chat" && (
-        <ScreenTransition key={`chat:${screen.chatId}`}>
+        )}
+        {screen.name === "chat" && (
           <ChatScreen
             chatId={screen.chatId}
             title={screen.title}
             peerUserId={screen.peerUserId}
-            onBack={() => setScreen({ name: "chatList" })}
+            onBack={() => go({ name: "chatList" })}
           />
-        </ScreenTransition>
-      )}
-      {screen.name === "settings" && (
-        <ScreenTransition key="settings">
-          <SettingsScreen onBack={() => setScreen({ name: "chatList" })} onLockChanged={lock.reload} />
-        </ScreenTransition>
-      )}
-      {screen.name === "contacts" && (
-        <ScreenTransition key="contacts" from="bottom">
+        )}
+        {screen.name === "settings" && (
+          <SettingsScreen onBack={() => go({ name: "chatList" })} onLockChanged={lock.reload} />
+        )}
+        {screen.name === "contacts" && (
           <ContactsScreen
-            onBack={() => setScreen({ name: "chatList" })}
-            onOpenChat={(chatId, title, peerUserId) => setScreen({ name: "chat", chatId, title, peerUserId })}
+            onBack={() => go({ name: "chatList" })}
+            onOpenChat={(chatId, title, peerUserId) => go({ name: "chat", chatId, title, peerUserId })}
           />
-        </ScreenTransition>
-      )}
+        )}
+      </Navigator>
+
       {/* Экран блокировки — поверх всего, но ВНУТРИ AppProvider: соединение под
           ним продолжает работать, сообщения приходят, уведомления показываются.
           Иначе включённая блокировка означала бы «не получать сообщения, пока

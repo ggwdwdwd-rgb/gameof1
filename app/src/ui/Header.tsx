@@ -1,7 +1,8 @@
-import React from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme/ThemeContext";
+import { DURATION, EASE_OUT } from "./motion";
 import { Icon } from "./Icon";
 
 /**
@@ -44,22 +45,47 @@ export function Header({
   // на Android приложение рисуется под строкой состояния (edge-to-edge).
   const insets = useSafeAreaInsets();
 
+  /**
+   * Подзаголовок меняется не подменой, а перетеканием.
+   *
+   * В чате он переключается между «был(а) недавно» и «печатает…» — то есть
+   * дёргается ровно в тот момент, когда человек смотрит на шапку. Мгновенная
+   * подмена читается как рывок; сдвиг на два пикселя с проявлением — как одна
+   * строка, которая сменилась.
+   */
+  const subtitleKey = subtitleNode ? "node" : (subtitle ?? "");
+  const swap = useRef(new Animated.Value(1)).current;
+  const shown = useRef(subtitleKey);
+  useEffect(() => {
+    if (shown.current === subtitleKey) return;
+    shown.current = subtitleKey;
+    swap.setValue(0);
+    Animated.timing(swap, { toValue: 1, duration: DURATION.fast, easing: EASE_OUT, useNativeDriver: true }).start();
+  }, [subtitleKey, swap]);
+
+  const subtitleStyle = {
+    opacity: swap,
+    transform: [{ translateY: swap.interpolate({ inputRange: [0, 1], outputRange: [-4, 0] }) }],
+  };
+
   const titleBlock = (
     <View style={align === "left" ? styles.textLeft : styles.textCenter}>
       <Text style={[styles.title, { color: theme.colors.textPrimary }]} numberOfLines={1}>
         {title}
       </Text>
       {subtitleNode ? (
-        <View style={styles.subtitleNode}>{subtitleNode}</View>
+        <Animated.View style={[styles.subtitleNode, subtitleStyle]}>{subtitleNode}</Animated.View>
       ) : subtitle ? (
-        <Pressable onPress={onPressSubtitle} disabled={!onPressSubtitle} hitSlop={8}>
-          <Text
-            style={[styles.subtitle, { color: subtitleColor ?? theme.colors.textSecondary }]}
-            numberOfLines={1}
-          >
-            {subtitle}
-          </Text>
-        </Pressable>
+        <Animated.View style={subtitleStyle}>
+          <Pressable onPress={onPressSubtitle} disabled={!onPressSubtitle} hitSlop={8}>
+            <Text
+              style={[styles.subtitle, { color: subtitleColor ?? theme.colors.textSecondary }]}
+              numberOfLines={1}
+            >
+              {subtitle}
+            </Text>
+          </Pressable>
+        </Animated.View>
       ) : null}
     </View>
   );

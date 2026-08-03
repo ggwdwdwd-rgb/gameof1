@@ -26,6 +26,7 @@ import { useTheme } from "../theme/ThemeContext";
 import type { Theme } from "../theme/theme";
 import { Icon, type IconName } from "./Icon";
 import { DURATION, useTransition, usePulse } from "./motion";
+import { haptic } from "./haptics";
 
 /** Через столько после последнего нажатия клавиши сообщаем «перестал печатать». */
 const TYPING_IDLE_MS = 3000;
@@ -188,6 +189,7 @@ function ComposerBase({
     setDraft("");
     if (typingStopTimer.current) clearTimeout(typingStopTimer.current);
     onTyping(false);
+    haptic("tap");
     void onSendText(text);
   }, [draft, onSendText, onTyping]);
 
@@ -243,6 +245,9 @@ function ComposerBase({
       recorder.record();
       startedAtRef.current = Date.now();
       setRecording(true);
+      // Отклик именно здесь, а не на нажатии: до этой строки запись могла не
+      // начаться (разрешение, занятый микрофон), и подтверждать было бы нечего.
+      haptic("start");
     } catch (error) {
       // Текст ошибки показываем как есть: иначе непонятно, дело в разрешении,
       // в занятом микрофоне или в чём-то ещё.
@@ -351,6 +356,17 @@ function ComposerBase({
   );
 
   const hasDraft = draft.trim().length > 0;
+  /**
+   * Перетекание микрофона в самолётик.
+   *
+   * Одна кнопка, две иконки внутри: обе смонтированы всегда и меняются
+   * масштабом, поворотом и прозрачностью. Раньше здесь стояла подмена по
+   * условию — иконка менялась мгновенно, и кнопка выглядела как две разные,
+   * мигающие на месте друг друга. Нажатия при этом принимает только та, что
+   * сейчас видна (pointerEvents), поэтому жест удержания для записи и обычное
+   * нажатие для отправки не конфликтуют.
+   */
+  const sendMorph = useTransition(hasDraft, DURATION.fast);
   const attachActions: { icon: IconName; label: string; onPress: () => void | Promise<void> }[] = [
     { icon: "image", label: "Фото", onPress: onPickImage },
     { icon: "file", label: "Файл", onPress: onPickFile },
@@ -439,26 +455,45 @@ function ComposerBase({
           </View>
         )}
 
-        {hasDraft ? (
-          <Pressable
-            style={({ pressed }) => [
-              styles.sendButton,
-              { backgroundColor: theme.colors.accent, transform: [{ scale: pressed ? 0.92 : 1 }] },
-            ]}
-            onPress={handleSend}
-          >
-            <Icon name="send" size={21} color={theme.colors.onAccent} />
-          </Pressable>
-        ) : (
-          // Кнопка микрофона: удержание записывает, смахивание влево отменяет.
+        <View style={styles.actionSlot}>
+          {/* Самолётик: приезжает из уменьшенного и повёрнутого состояния. */}
           <Animated.View
+            pointerEvents={hasDraft ? "auto" : "none"}
+            style={[
+              styles.actionLayer,
+              {
+                opacity: sendMorph,
+                transform: [
+                  { scale: sendMorph.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] }) },
+                  { rotate: sendMorph.interpolate({ inputRange: [0, 1], outputRange: ["-50deg", "0deg"] }) },
+                ],
+              },
+            ]}
+          >
+            <Pressable
+              style={({ pressed }) => [
+                styles.sendButton,
+                { backgroundColor: theme.colors.accent, transform: [{ scale: pressed ? 0.9 : 1 }] },
+              ]}
+              onPress={handleSend}
+            >
+              <Icon name="send" size={21} color={theme.colors.onAccent} />
+            </Pressable>
+          </Animated.View>
+
+          {/* Микрофон: удержание записывает, смахивание влево отменяет. */}
+          <Animated.View
+            pointerEvents={hasDraft ? "none" : "auto"}
             {...panResponder.panHandlers}
             style={[
+              styles.actionLayer,
               styles.sendButton,
               {
                 backgroundColor: cancelArmed ? theme.colors.danger : theme.colors.accent,
+                opacity: sendMorph.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
                 transform: [
-                  { scale: recording ? recordScale : 1 },
+                  { scale: Animated.multiply(recording ? recordScale : 1, sendMorph.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] })) },
+                  { rotate: sendMorph.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "50deg"] }) },
                   // Кнопка едет за пальцем, но вдвое медленнее — так видно, что
                   // жест поймали, и палец при этом не убегает от кнопки.
                   { translateX: Animated.multiply(slide, 0.5) },
@@ -468,7 +503,7 @@ function ComposerBase({
           >
             <Icon name={cancelArmed ? "trash" : "mic"} size={21} color={theme.colors.onAccent} />
           </Animated.View>
-        )}
+        </View>
       </View>
     </>
   );
@@ -590,4 +625,8 @@ const styles = StyleSheet.create({
   attachButton: { width: 38, height: 42, alignItems: "center", justifyContent: "center" },
   input: { flex: 1, paddingTop: 11, paddingBottom: 11, maxHeight: 120, fontSize: 16, lineHeight: 21 },
   sendButton: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  // Обе иконки лежат в одной ячейке друг поверх друга: только так они могут
+  // перетекать, а не подменяться.
+  actionSlot: { width: 44, height: 44 },
+  actionLayer: { position: "absolute", top: 0, left: 0 },
 });

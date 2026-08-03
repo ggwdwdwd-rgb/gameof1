@@ -8,9 +8,10 @@ import { listLastMessages, listUnreadCounts, type LocalMessage } from "../db/mes
 import { useTheme } from "../theme/ThemeContext";
 import type { Theme } from "../theme/theme";
 import { Avatar } from "../ui/Avatar";
+import { StatusTicks } from "../ui/StatusTicks";
 import { Header } from "../ui/Header";
 import { Icon, type IconName } from "../ui/Icon";
-import { DURATION, useTransition } from "../ui/motion";
+import { DURATION, useTransition, useBump } from "../ui/motion";
 
 interface ChatRow {
   chatId: string;
@@ -86,6 +87,9 @@ const ChatRowView = React.memo(function ChatRowView({
   // Бейдж не появляется рывком, а вырастает — тогда новое сообщение заметно
   // даже боковым зрением.
   const badge = useTransition(row.unread > 0, DURATION.fast);
+  // Отдельно от появления: когда счётчик растёт с 2 до 3, бейдж уже виден, и
+  // без подскока новое сообщение в открытом списке ничем не отмечено.
+  const bump = useBump(row.unread);
 
   return (
     <Pressable
@@ -113,16 +117,13 @@ const ChatRowView = React.memo(function ChatRowView({
         <View style={styles.rowBottomLine}>
           {row.outgoingStatus && (
             <View style={styles.previewTick}>
-              <Icon
-                name={
-                  row.outgoingStatus === "pending"
-                    ? "clock"
-                    : row.outgoingStatus === "sent"
-                      ? "check"
-                      : "checkDouble"
-                }
+              {/* Те же галочки, что в пузыре: статус последнего своего
+                  сообщения меняется и здесь, и анимация должна быть одна. */}
+              <StatusTicks
+                status={row.outgoingStatus}
+                color={theme.colors.textMuted}
+                readColor={theme.colors.accent}
                 size={15}
-                color={row.outgoingStatus === "read" ? theme.colors.accent : theme.colors.textMuted}
               />
             </View>
           )}
@@ -141,7 +142,14 @@ const ChatRowView = React.memo(function ChatRowView({
                 {
                   backgroundColor: theme.colors.accent,
                   opacity: badge,
-                  transform: [{ scale: badge.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) }],
+                  transform: [
+                    {
+                      scale: Animated.multiply(
+                        badge.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }),
+                        bump.interpolate({ inputRange: [0, 1], outputRange: [1, 1.28] }),
+                      ),
+                    },
+                  ],
                 },
               ]}
             >

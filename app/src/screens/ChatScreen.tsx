@@ -1,6 +1,6 @@
 import * as Clipboard from "expo-clipboard";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Animated, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { buildEnvelopeFromLocalFile, persistLocalFile } from "../chat/media";
 import { getCurrentLocationOnce, pickAndCompressImage, pickFile } from "../chat/pickers";
 import { useApp, type SendResult } from "../context/AppContext";
@@ -19,6 +19,8 @@ import { Toast, useToast } from "../ui/Toast";
 import { TypingDots } from "../ui/TypingDots";
 import { describePresence } from "../ui/presence";
 import { useKeyboard } from "../ui/useKeyboard";
+import { DURATION, useTransition } from "../ui/motion";
+import { haptic } from "../ui/haptics";
 import { Wallpaper } from "../ui/Wallpaper";
 import { uuidv4 } from "../util/uuid";
 
@@ -120,6 +122,15 @@ export function ChatScreen({
   const [menuFor, setMenuFor] = useState<LocalMessage | null>(null);
   const { toast, showToast, hideToast } = useToast();
   const listRef = useRef<FlatList<Decorated>>(null);
+  /**
+   * Кнопка «вниз»: появляется, когда переписку отмотали от последних сообщений.
+   *
+   * Список inverted, поэтому «внизу» — это contentOffset.y около нуля. Порог в
+   * 220 px, а не ноль: при обычном чтении палец постоянно сдвигает список на
+   * десяток пикселей, и кнопка мигала бы.
+   */
+  const [scrolledUp, setScrolledUp] = useState(false);
+  const jumpAnim = useTransition(scrolledUp, DURATION.normal);
 
   const contact = contacts.find((c) => c.userId === peerUserId);
   // Имя берём из контакта, а не только из пропса: если его переименовали, пока
@@ -232,6 +243,9 @@ export function ChatScreen({
   // о каком сообщении речь.
   const handleLongPress = useCallback((item: LocalMessage): void => {
     if (item.deletedAt) return;
+    // Отклик на удержание: жест длинный, и без подтверждения непонятно, поймали
+    // его или палец надо держать дальше.
+    haptic("press");
     setMenuFor(item);
   }, []);
 
@@ -378,6 +392,11 @@ export function ChatScreen({
         maxToRenderPerBatch={12}
         windowSize={9}
         keyboardShouldPersistTaps="handled"
+        onScroll={(event) => {
+          const away = event.nativeEvent.contentOffset.y > 220;
+          if (away !== scrolledUp) setScrolledUp(away);
+        }}
+        scrollEventThrottle={64}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Avatar name={peerTitle} seed={peerUserId} size={84} />
@@ -416,6 +435,43 @@ export function ChatScreen({
           </Pressable>
         </View>
       )}
+
+      {/* Кнопка «вниз»: в длинной переписке возврат к последним сообщениям
+          пальцем — это долгая прокрутка. Как в Telegram: появляется, только
+          когда список отмотан, и уезжает вниз, когда уже не нужна. */}
+      <Animated.View
+        pointerEvents={scrolledUp ? "auto" : "none"}
+        style={[
+          styles.jumpWrap,
+          {
+            bottom: 84 + keyboard.safeBottom,
+            opacity: jumpAnim,
+            transform: [
+              { translateY: jumpAnim.interpolate({ inputRange: [0, 1], outputRange: [26, 0] }) },
+              { scale: jumpAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) },
+            ],
+          },
+        ]}
+      >
+        <Pressable
+          style={({ pressed }) => [
+            styles.jumpButton,
+            {
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border,
+              shadowColor: theme.colors.shadow,
+              transform: [{ scale: pressed ? 0.92 : 1 }],
+            },
+          ]}
+          onPress={() => listRef.current?.scrollToOffset({ offset: 0, animated: true })}
+        >
+          {/* Список inverted, поэтому «вниз» — это offset 0, а стрелку рисуем
+              повёрнутой иконкой «назад»: своей «вниз» в наборе нет. */}
+          <View style={styles.jumpIcon}>
+            <Icon name="back" size={21} color={theme.colors.textSecondary} />
+          </View>
+        </Pressable>
+      </Animated.View>
 
       {/* Отозванному устройству сообщения не доставляются, поэтому строку ввода
           убираем совсем: иначе отправленное молча висело бы «отправлено» без
@@ -488,6 +544,20 @@ function keyExtractor(row: Decorated): string {
 }
 
 const styles = StyleSheet.create({
+  jumpWrap: { position: "absolute", right: 14 },
+  jumpButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  jumpIcon: { transform: [{ rotate: "-90deg" }] },
   container: { flex: 1 },
   headerAction: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   list: { paddingHorizontal: 10, paddingTop: 6, paddingBottom: 12 },
