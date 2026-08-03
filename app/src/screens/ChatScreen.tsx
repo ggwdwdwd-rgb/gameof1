@@ -16,6 +16,7 @@ import { ImageViewer } from "../ui/ImageViewer";
 import { MessageBubble, type Decorated } from "../ui/MessageBubble";
 import { RenameModal } from "../ui/RenameModal";
 import { Toast, useToast } from "../ui/Toast";
+import { TypingDots } from "../ui/TypingDots";
 import { describePresence } from "../ui/presence";
 import { useKeyboard } from "../ui/useKeyboard";
 import { Wallpaper } from "../ui/Wallpaper";
@@ -328,14 +329,13 @@ export function ChatScreen({
       <Header
         align="left"
         title={peerTitle}
-        // «Печатает» важнее статуса, статус важнее отпечатка ключа.
-        subtitle={peerTyping ? "печатает…" : presenceText !== "" ? presenceText : undefined}
+        // «Печатает» важнее статуса, статус важнее отпечатка ключа. Для
+        // «печатает» — отдельный элемент с анимированными точками: статичная
+        // надпись читается как состояние, а не как процесс.
+        subtitleNode={peerTyping ? <TypingDots color={theme.colors.accent} /> : undefined}
+        subtitle={peerTyping ? undefined : presenceText !== "" ? presenceText : undefined}
         subtitleColor={
-          peerTyping
-            ? theme.colors.accent
-            : presence.get(peerUserId)?.online === true
-              ? theme.colors.success
-              : theme.colors.textMuted
+          presence.get(peerUserId)?.online === true ? theme.colors.success : theme.colors.textMuted
         }
         onBack={onBack}
         // Нажатие по имени в шапке — переименование, как в мессенджерах: там же,

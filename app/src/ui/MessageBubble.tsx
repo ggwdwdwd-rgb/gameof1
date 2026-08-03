@@ -476,8 +476,10 @@ const styles = StyleSheet.create({
   },
   bubbleMine: { alignSelf: "flex-end" },
   bubbleTheirs: { alignSelf: "flex-start", borderWidth: StyleSheet.hairlineWidth },
-  tailMine: { borderBottomRightRadius: 7 },
-  tailTheirs: { borderBottomLeftRadius: 7 },
+  // Почти прямой угол у последнего сообщения группы: именно он читается как
+  // «хвостик» и отделяет серию от следующей.
+  tailMine: { borderBottomRightRadius: 5 },
+  tailTheirs: { borderBottomLeftRadius: 5 },
   // У фото отступы убираем явными longhand-свойствами: короткое `padding`
   // в RN проигрывает более специфичному `paddingHorizontal` базового стиля.
   bubbleImage: { paddingHorizontal: 3, paddingTop: 3, paddingBottom: 3, overflow: "hidden" },

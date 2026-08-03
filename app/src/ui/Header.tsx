@@ -21,9 +21,15 @@ export function Header({
   avatar,
   align = "center",
   subtitleColor,
+  subtitleNode,
 }: {
   title: string;
   subtitle?: string | undefined;
+  /**
+   * Подзаголовок отдельным элементом вместо строки — для «печатает» с
+   * анимированными точками. Имеет приоритет над subtitle.
+   */
+  subtitleNode?: React.ReactNode;
   onBack?: (() => void) | undefined;
   right?: React.ReactNode;
   left?: React.ReactNode;
@@ -43,7 +49,9 @@ export function Header({
       <Text style={[styles.title, { color: theme.colors.textPrimary }]} numberOfLines={1}>
         {title}
       </Text>
-      {subtitle ? (
+      {subtitleNode ? (
+        <View style={styles.subtitleNode}>{subtitleNode}</View>
+      ) : subtitle ? (
         <Pressable onPress={onPressSubtitle} disabled={!onPressSubtitle} hitSlop={8}>
           <Text
             style={[styles.subtitle, { color: subtitleColor ?? theme.colors.textSecondary }]}
@@ -113,4 +121,5 @@ const styles = StyleSheet.create({
   textCenter: { alignItems: "center" },
   title: { fontSize: 17, fontWeight: "600", letterSpacing: -0.2 },
   subtitle: { fontSize: 12.5, marginTop: 1.5 },
+  subtitleNode: { marginTop: 1.5 },
 });

@@ -45,71 +45,92 @@ export interface Theme {
 }
 
 /**
- * Палитра Claude: тёплая терракота как акцент, кремовая бумага в светлой теме и
- * тёплый графит в тёмной. Никаких «холодных» синих — вся серая шкала уводится в
- * тёплую сторону, иначе акцент выглядит инородным.
+ * Чёрно-белая палитра.
+ *
+ * Цвет здесь не декорация, а единственный способ расставить смысл: акцент —
+ * чистый чёрный в светлой теме и чистый белый в тёмной, всё остальное строится
+ * серой шкалой. Своё сообщение — инверсия фона (чёрный пузырь с белым текстом и
+ * наоборот): в монохроме это самый сильный доступный контраст, и переписка
+ * читается с одного взгляда, без цветовых подсказок.
+ *
+ * Единственное исключение — `danger`: приглушённый красный остаётся на
+ * удалении, отзыве доступа и ошибках. Так делают все строгие монохромные
+ * интерфейсы: «необратимое действие» нельзя доверять одной типографике, а
+ * приглушённый тон не ломает общий вид.
+ *
+ * «В сети» тоже монохромное: точка красится акцентом с кольцом цвета фона —
+ * зелёный тут выглядел бы заплаткой.
  */
 const lightTheme: Theme = {
   name: "light",
   colors: {
-    background: "#faf9f5",
+    // Фон списка чуть темнее карточек — это даёт глубину без теней и рамок.
+    background: "#f2f2f2",
     surface: "#ffffff",
     surfaceElevated: "#ffffff",
-    surfacePressed: "#f0eee6",
-    border: "#e6e3d9",
-    divider: "#efece3",
-    textPrimary: "#141413",
-    textSecondary: "#605e57",
-    textMuted: "#96938a",
-    accent: "#d97757",
-    accentSoft: "#f7ece7",
+    surfacePressed: "#e6e6e6",
+    border: "#dcdcdc",
+    divider: "#e8e8e8",
+    textPrimary: "#0a0a0a",
+    textSecondary: "#5c5c5c",
+    textMuted: "#8e8e8e",
+    accent: "#0a0a0a",
+    accentSoft: "#ebebeb",
     onAccent: "#ffffff",
-    bubbleMine: "#d97757",
+    bubbleMine: "#0a0a0a",
     bubbleTheirs: "#ffffff",
     bubbleMineText: "#ffffff",
-    bubbleTheirsText: "#141413",
-    bubbleMineMeta: "rgba(255,255,255,0.78)",
-    bubbleTheirsMeta: "#96938a",
+    bubbleTheirsText: "#0a0a0a",
+    bubbleMineMeta: "rgba(255,255,255,0.72)",
+    bubbleTheirsMeta: "#8e8e8e",
     readTick: "#ffffff",
-    danger: "#c0492f",
-    success: "#3f8f5f",
-    wallpaperFrom: "#f4f1e8",
-    wallpaperTo: "#faf9f5",
-    dateChip: "rgba(20,20,19,0.06)",
-    dateChipText: "#605e57",
-    shadow: "#141413",
+    danger: "#8c1d18",
+    success: "#0a0a0a",
+    wallpaperFrom: "#ededed",
+    wallpaperTo: "#f7f7f7",
+    dateChip: "rgba(10,10,10,0.07)",
+    dateChipText: "#5c5c5c",
+    shadow: "#000000",
     statusBar: "dark",
   },
 };
 
+/**
+ * Тёмная тема — на чистом чёрном, а не на графите.
+ *
+ * На OLED-экранах чёрный пиксель не горит: интерфейс сливается с рамкой, и
+ * получается тот самый вид, за который любят ночные темы мессенджеров. Серая
+ * шкала строго нейтральная — любой тёплый или холодный уход сразу читается как
+ * «цвет» и рушит монохром.
+ */
 const darkTheme: Theme = {
   name: "dark",
   colors: {
-    background: "#1a1918",
-    surface: "#242322",
-    surfaceElevated: "#2e2d2b",
-    surfacePressed: "#302f2c",
-    border: "#3a3835",
-    divider: "#2e2d2b",
-    textPrimary: "#f5f3ee",
-    textSecondary: "#b5b2a8",
-    textMuted: "#85827a",
-    accent: "#e08a68",
-    accentSoft: "#3a2b24",
-    onAccent: "#20130d",
-    bubbleMine: "#b8613f",
-    bubbleTheirs: "#2c2b29",
-    bubbleMineText: "#fdf8f5",
-    bubbleTheirsText: "#f5f3ee",
-    bubbleMineMeta: "rgba(253,248,245,0.72)",
-    bubbleTheirsMeta: "#85827a",
-    readTick: "#fdf8f5",
-    danger: "#e07a62",
-    success: "#5cae7c",
-    wallpaperFrom: "#161514",
-    wallpaperTo: "#1e1d1b",
-    dateChip: "rgba(245,243,238,0.09)",
-    dateChipText: "#b5b2a8",
+    background: "#000000",
+    surface: "#101010",
+    surfaceElevated: "#1c1c1c",
+    surfacePressed: "#1f1f1f",
+    border: "#262626",
+    divider: "#1a1a1a",
+    textPrimary: "#f7f7f7",
+    textSecondary: "#a8a8a8",
+    textMuted: "#6e6e6e",
+    accent: "#ffffff",
+    accentSoft: "#1c1c1c",
+    onAccent: "#0a0a0a",
+    bubbleMine: "#f2f2f2",
+    bubbleTheirs: "#161616",
+    bubbleMineText: "#0a0a0a",
+    bubbleTheirsText: "#f7f7f7",
+    bubbleMineMeta: "rgba(10,10,10,0.62)",
+    bubbleTheirsMeta: "#6e6e6e",
+    readTick: "#0a0a0a",
+    danger: "#f2b8b5",
+    success: "#ffffff",
+    wallpaperFrom: "#000000",
+    wallpaperTo: "#0b0b0b",
+    dateChip: "rgba(247,247,247,0.1)",
+    dateChipText: "#a8a8a8",
     shadow: "#000000",
     statusBar: "light",
   },
@@ -118,20 +139,23 @@ const darkTheme: Theme = {
 export const themes: Record<ThemeName, Theme> = { light: lightTheme, dark: darkTheme };
 
 /**
- * Цвета аватаров — тёплые оттенки вокруг акцента, чтобы список чатов выглядел
- * одним набором, а не радугой. Пара выбирается детерминированно по userId,
- * поэтому цвет человека не меняется между запусками. Градиент из двух тонов
- * даёт объём без картинок.
+ * Аватары — градиенты серой шкалы.
+ *
+ * Пара выбирается детерминированно по userId, поэтому оттенок человека не
+ * меняется между запусками и его узнаёшь в списке. Все восемь достаточно тёмные,
+ * чтобы белые инициалы читались, и достаточно разные, чтобы соседние строки не
+ * слипались. В монохроме различать людей цветом почти нечем — поэтому взят весь
+ * доступный диапазон от угольного до среднего серого.
  */
 const AVATAR_GRADIENTS: readonly (readonly [string, string])[] = [
-  ["#e0906e", "#c9613c"],
-  ["#d9a05b", "#bd7333"],
-  ["#c98a7a", "#a85b4c"],
-  ["#b98f5f", "#94693a"],
-  ["#cf7f8e", "#a8505f"],
-  ["#a89a72", "#7f7049"],
-  ["#d3855e", "#a95c34"],
-  ["#9c9b83", "#736f57"],
+  ["#3d3d3d", "#0f0f0f"],
+  ["#6b6b6b", "#2e2e2e"],
+  ["#4f4f4f", "#1c1c1c"],
+  ["#7d7d7d", "#3f3f3f"],
+  ["#2b2b2b", "#000000"],
+  ["#5c5c5c", "#242424"],
+  ["#8a8a8a", "#4a4a4a"],
+  ["#454545", "#141414"],
 ];
 
 function hashSeed(seed: string): number {

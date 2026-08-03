@@ -1,6 +1,7 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import { useTheme } from "../theme/ThemeContext";
 import { avatarGradient } from "../theme/theme";
 
 /**
@@ -18,11 +19,12 @@ function AvatarBase({
   name: string;
   seed: string;
   size?: number;
-  /** Зелёная точка «в сети» в правом нижнем углу. */
+  /** Точка «в сети» в правом нижнем углу. */
   online?: boolean;
   /** Цвет обводки точки — под фон, на котором нарисован аватар. */
   ringColor?: string;
 }): React.ReactElement {
+  const theme = useTheme();
   const initials = initialsOf(name);
   const [from, to] = avatarGradient(seed);
   const gradientId = `avatar-${seed.replace(/[^a-zA-Z0-9]/g, "")}`;
@@ -48,7 +50,11 @@ function AvatarBase({
               height: size * 0.28,
               borderRadius: size * 0.14,
               borderWidth: Math.max(1.5, size * 0.05),
-              borderColor: ringColor ?? "#fff",
+              borderColor: ringColor ?? theme.colors.background,
+              // Акцент, а не зелёный: в монохромной палитре зелёная точка
+              // выглядит заплаткой. Кольцо цветом фона отделяет её от аватара —
+              // без кольца точка сливалась бы с тёмным градиентом.
+              backgroundColor: theme.colors.accent,
             },
           ]}
         />
@@ -71,6 +77,6 @@ function initialsOf(name: string): string {
 const styles = StyleSheet.create({
   // overflow не скрываем: точка «в сети» выходит за круг аватара.
   wrap: { alignItems: "center", justifyContent: "center" },
-  onlineDot: { position: "absolute", right: 0, bottom: 0, backgroundColor: "#3f9e63" },
+  onlineDot: { position: "absolute", right: 0, bottom: 0 },
   text: { color: "#fff", fontWeight: "600", letterSpacing: 0.3 },
 });
