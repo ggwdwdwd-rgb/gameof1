@@ -58,6 +58,17 @@ export interface UsernameSetPayload {
   username: string;
 }
 
+/**
+ * Привязка почты и пароля к уже существующему участнику — для тех, кто вошёл
+ * одноразовым кодом до появления аккаунтов и остался без средств восстановления.
+ */
+export interface AccountClaimPayload {
+  email: string;
+  password: string;
+  username: string;
+  phone?: string;
+}
+
 export interface InviteRedeemPayload {
   code: string;
   deviceId: string;

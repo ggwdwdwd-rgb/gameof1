@@ -10,6 +10,7 @@ import {
   type ContactAddedPayload,
   type UserFoundPayload,
   type UsernameOkPayload,
+  type AccountClaimOkPayload,
   type AuthErrorPayload,
   type AuthOkPayload,
   type ErrorPayload,
@@ -95,6 +96,8 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   userFound: (payload: UserFoundPayload) => void;
   contactAdded: (payload: ContactAddedPayload) => void;
   usernameOk: (payload: UsernameOkPayload) => void;
+  accountClaimed: (payload: AccountClaimOkPayload) => void;
+  accountClaimError: (payload: AccountErrorPayload) => void;
   backupOk: (payload: { sizeBytes: number; updatedAt: number }) => void;
   backupBlob: (payload: { blob: string | null; updatedAt: number | null; sizeBytes: number | null }) => void;
   backupInfo: (payload: { updatedAt: number | null; sizeBytes: number | null }) => void;
@@ -276,6 +279,17 @@ export class WsClient {
     return this.rawSend(this.ws, "username.set", { username });
   }
 
+  /**
+   * Привязка почты и пароля к уже существующему участнику.
+   *
+   * Не регистрация: userId, устройство, контакты и переписка остаются те же.
+   * Нужна тем, кто вошёл одноразовым кодом до появления аккаунтов.
+   */
+  claimAccount(input: { email: string; password: string; username: string; phone?: string }): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "account.claim", input);
+  }
+
   /** false, если пакет не удалось отправить (нет открытого соединения). */
   requestInvite(ttlHours?: number): boolean {
     if (!this.ws) return false;
@@ -363,6 +377,12 @@ export class WsClient {
         return;
       case "username.ok":
         this.events.emit("usernameOk", parsed.payload as UsernameOkPayload);
+        return;
+      case "account.claim.ok":
+        this.events.emit("accountClaimed", parsed.payload as AccountClaimOkPayload);
+        return;
+      case "account.claim.error":
+        this.events.emit("accountClaimError", parsed.payload as AccountErrorPayload);
         return;
       case "backup.ok":
         this.events.emit("backupOk", parsed.payload as { sizeBytes: number; updatedAt: number });

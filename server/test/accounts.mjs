@@ -411,6 +411,94 @@ alice.received = alice.received.filter((m) => m.type !== "backup.info.ok");
 alice.send("backup.info", {});
 check("после удаления копии нет", (await alice.wait("backup.info.ok")).payload.updatedAt === null);
 
+// ── 11. Участник из инвайта привязывает почту и пароль ─────────────────────
+//
+// Это про уже живых людей: те, кто вошёл одноразовым кодом до появления
+// аккаунтов, остались без почты и пароля, то есть без всякой возможности
+// восстановить доступ после потери телефона. auth.register им не подходит — он
+// создал бы НОВОГО человека и отобрал бы контакты с перепиской. Поэтому
+// account.claim меняет только сам аккаунт, сохраняя userId.
+alice.received = alice.received.filter((m) => m.type !== "invite.created");
+alice.send("invite.create", {});
+const inviteForOld = await alice.wait("invite.created");
+
+const legacy = new Client("Старожил");
+await legacy.open();
+legacy.send("invite.redeem", {
+  code: inviteForOld.payload.code,
+  displayName: "Старожил",
+  ...legacy.keys(),
+});
+const legacyOk = await legacy.wait("invite.redeem.ok");
+legacy.userId = legacyOk.payload.userId;
+check("участник заведён одноразовым кодом", Boolean(legacy.userId));
+
+// Пока почты нет, вход по ней невозможен в принципе — и это не «неверный
+// пароль», а отдельная причина: человеку надо сказать, что делать.
+const noAccount = new Client("Без-аккаунта");
+await noAccount.open();
+noAccount.send("auth.login", { email: `legacy_${RUN}@example.com`, password: "любой-длинный-пароль", ...noAccount.keys() });
+check(
+  "по непривязанной почте войти нельзя",
+  (await noAccount.wait("auth.login.error")).payload.code === "BAD_CREDENTIALS",
+);
+noAccount.ws.close();
+
+const legacyEmail = `legacy_${RUN}@example.com`;
+legacy.send("account.claim", {
+  email: legacyEmail,
+  password: "очень-длинный-пароль",
+  username: `legacy_${RUN}`,
+});
+const claimed = await legacy.wait("account.claim.ok");
+check("почта привязана к существующему участнику", claimed.payload.email === legacyEmail, String(claimed.payload.email));
+check("тег привязан", claimed.payload.username === `legacy_${RUN}`);
+
+// Контакт узнаёт тег: карточка человека у него должна обновиться.
+const legacyTagSeen = await alice.wait("member.updated", (m) => m.payload.userId === legacy.userId);
+check("контакту приходит новый тег", legacyTagSeen.payload.username === `legacy_${RUN}`);
+
+// Повторная привязка запрещена: смена пароля обязана требовать прежний, иначе
+// украденный разблокированный телефон означал бы захваченный аккаунт.
+legacy.received = legacy.received.filter((m) => m.type !== "account.claim.error");
+legacy.send("account.claim", { email: `other_${RUN}@example.com`, password: "другой-длинный-пароль", username: `other_${RUN}` });
+check(
+  "второй раз привязать нельзя",
+  (await legacy.wait("account.claim.error")).payload.code === "ALREADY_HAS_PASSWORD",
+);
+
+// Занятую почту не отдаём и здесь — иначе привязкой можно было бы угнать чужой
+// логин.
+const legacy2 = new Client("Старожил-2");
+await legacy2.open();
+alice.received = alice.received.filter((m) => m.type !== "invite.created");
+alice.send("invite.create", {});
+legacy2.send("invite.redeem", {
+  code: (await alice.wait("invite.created")).payload.code,
+  displayName: "Старожил-2",
+  ...legacy2.keys(),
+});
+await legacy2.wait("invite.redeem.ok");
+legacy2.send("account.claim", { email: legacyEmail, password: "очень-длинный-пароль", username: `legacy2_${RUN}` });
+check("занятую почту привязать нельзя", (await legacy2.wait("account.claim.error")).payload.code === "EMAIL_TAKEN");
+legacy2.ws.close();
+
+// И главное: теперь он входит с нового телефона, оставаясь тем же человеком.
+const legacyPhone2 = new Client("Старожил-новый-телефон");
+legacyPhone2.deviceId = randomUUID();
+await legacyPhone2.open();
+legacyPhone2.send("auth.login", { email: legacyEmail, password: "очень-длинный-пароль", ...legacyPhone2.keys() });
+const legacyLogin = await legacyPhone2.wait("auth.login.ok");
+check("вход с нового телефона по привязанной почте", legacyLogin.payload.userId === legacy.userId);
+const legacyRoster = await legacyPhone2.wait("roster.snapshot");
+check(
+  "контакты остались его",
+  legacyRoster.payload.members.some((m) => m.userId === alice.userId),
+  JSON.stringify(legacyRoster.payload.members.map((m) => m.displayName)),
+);
+legacyPhone2.ws.close();
+legacy.ws.close();
+
 alice.ws.close();
 bobPhone2.ws.close();
 

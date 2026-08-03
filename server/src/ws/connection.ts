@@ -13,6 +13,7 @@ import { findDevice, setDeviceRevoked } from "../devices.js";
 import { backupInfo, deleteBackup, getBackup, MAX_BACKUP_BYTES, putBackup } from "../backups.js";
 import {
   accountOf,
+  claimAccount,
   contactIdsOf,
   linkContacts,
   login,
@@ -39,6 +40,7 @@ import {
   type AuthLoginPayload,
   type AuthRegisterPayload,
   type AuthResponsePayload,
+  type AccountClaimPayload,
   type ContactAddPayload,
   type Envelope,
   type HistoryFetchPayload,
@@ -240,7 +242,7 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
                 code: result.code,
                 message:
                   result.code === "NO_PASSWORD"
-                    ? "У этого аккаунта нет пароля: он был создан по коду приглашения. Войдите с прежнего устройства и задайте пароль."
+                    ? "У этого аккаунта нет пароля: он был создан по коду приглашения. Откройте Cry на прежнем телефоне и в настройках нажмите «Привязать почту и пароль»."
                     : "Неверная почта или пароль",
               }),
             );
@@ -445,6 +447,49 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           contactIdsOf(userId),
           envelope("member.updated", { userId, displayName: account?.displayName ?? "", username: account?.username ?? null }),
         );
+        return;
+      }
+
+      /**
+       * Привязка почты и пароля к уже существующему участнику.
+       *
+       * Для тех, кто вошёл одноразовым кодом до появления аккаунтов: без этого
+       * им нечем восстановить доступ после потери телефона, а auth.register
+       * создал бы НОВОГО человека и отобрал бы у них контакты и переписку.
+       *
+       * Право даёт уже пройденная аутентификация устройства — подпись ключом,
+       * который никогда не покидал телефон.
+       */
+      if (parsed.type === "account.claim") {
+        const payload = parsed.payload as AccountClaimPayload;
+        const result = await claimAccount(userId, payload);
+        if (!result.ok) {
+          const message =
+            result.code === "ALREADY_HAS_PASSWORD"
+              ? "У этого аккаунта уже есть пароль. Смена пароля — отдельное действие, она требует прежний пароль."
+              : VALIDATION_MESSAGES[result.code];
+          log.warn({ userId, code: result.code }, "отказ в привязке аккаунта");
+          send(socket, envelope("account.claim.error", { code: result.code, message }));
+          return;
+        }
+        send(
+          socket,
+          envelope("account.claim.ok", {
+            email: result.account.email,
+            username: result.account.username,
+            phone: result.account.phone,
+          }),
+        );
+        // Тег виден контактам в карточке — сообщаем им, и только им.
+        broadcastToUsers(
+          contactIdsOf(userId),
+          envelope("member.updated", {
+            userId,
+            displayName: result.account.displayName,
+            username: result.account.username,
+          }),
+        );
+        log.info({ userId }, "к участнику привязаны почта и пароль");
         return;
       }
 

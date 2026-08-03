@@ -82,6 +82,13 @@ export interface UsernameOkPayload {
   username: string | null;
 }
 
+/** Почта и пароль привязаны к уже существующему участнику. */
+export interface AccountClaimOkPayload {
+  email: string | null;
+  username: string | null;
+  phone: string | null;
+}
+
 export interface RosterMemberPayload {
   userId: string;
   deviceId: string;

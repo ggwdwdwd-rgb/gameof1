@@ -133,6 +133,13 @@ interface AppContextData {
   /** Свой @тег — его показывают, чтобы человек мог им поделиться. */
   username: string | null;
   /**
+   * Своя почта: ею человек входит с нового телефона.
+   *
+   * null — участник, заведённый одноразовым кодом до появления аккаунтов.
+   * Восстановить доступ ему нечем, пока он не привяжет почту (claimAccount).
+   */
+  email: string | null;
+  /**
    * Можно ли распоряжаться составом. Приходит от сервера (первый
    * зарегистрированный участник) — клиент только показывает кнопку.
    */
@@ -181,6 +188,19 @@ interface AppActions {
   addContact: (user: FoundUser) => Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Смена своего @тега. */
   changeUsername: (username: string) => Promise<{ ok: true } | { ok: false; detail: string }>;
+  /**
+   * Привязать почту и пароль к своему уже существующему участнику.
+   *
+   * Для тех, кто вошёл одноразовым кодом до появления аккаунтов: userId, ключи,
+   * контакты и переписка остаются те же, добавляется только способ войти с
+   * нового телефона.
+   */
+  claimAccount: (input: {
+    email: string;
+    password: string;
+    username: string;
+    phone?: string;
+  }) => Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Создать резервную копию переписки и отправить её на сервер. */
   backupNow: (passphrase: string) => Promise<{ ok: true; messages: number } | { ok: false; detail: string }>;
   /** Восстановить переписку из копии на сервере. */
@@ -271,6 +291,11 @@ export function AppProvider({
   const [displayName, setDisplayName] = useState(identity.displayName);
   /** Свой @тег: по нему тебя находят другие. */
   const [username, setUsername] = useState<string | null>(identity.username ?? null);
+  /**
+   * Своя почта — ею человек входит с нового телефона. null означает участника,
+   * заведённого одноразовым кодом: аккаунта у него ещё нет (см. claimAccount).
+   */
+  const [email, setEmail] = useState<string | null>(identity.email ?? null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [backgroundEnabled, setBackgroundEnabled] = useState(false);
   /**
@@ -1135,6 +1160,59 @@ export function AppProvider({
         });
       },
       /**
+       * Привязка почты и пароля к своему уже существующему участнику.
+       *
+       * Не регистрация: userId, ключи, контакты и переписка остаются те же.
+       * Нужна тем, кто вошёл одноразовым кодом до появления аккаунтов, — без
+       * почты и пароля им нечем восстановить доступ после потери телефона.
+       */
+      async claimAccount(input) {
+        const ws = wsRef.current;
+        if (!ws || !(await ws.waitUntilReady(WAIT_READY_MS))) {
+          return { ok: false, detail: "нет соединения с сервером" };
+        }
+
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (result: { ok: true } | { ok: false; detail: string }): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offOk();
+            offError();
+            offUnknown();
+            resolve(result);
+          };
+          // Дольше обычного: сервер считает Argon2id (около секунды) и делает это
+          // по одному запросу за раз, поэтому под нагрузкой ответ приходит позже.
+          const timer = setTimeout(() => finish({ ok: false, detail: "сервер не ответил" }), 30_000);
+          const offOk = ws.events.on("accountClaimed", (payload) => {
+            setUsername(payload.username);
+            setEmail(payload.email);
+            // В identity тоже: почта и тег показываются в настройках до
+            // подключения, из сохранённых данных.
+            void saveIdentity({ ...identity, username: payload.username, email: payload.email });
+            finish({ ok: true });
+          });
+          const offError = ws.events.on("accountClaimError", (payload) => {
+            finish({ ok: false, detail: payload.message });
+          });
+          const offUnknown = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") finish({ ok: false, detail: "сервер устарел — обновите его" });
+          });
+          if (
+            !ws.claimAccount({
+              email: input.email.trim(),
+              password: input.password,
+              username: input.username.trim(),
+              ...(input.phone !== undefined && input.phone.trim() !== "" ? { phone: input.phone.trim() } : {}),
+            })
+          ) {
+            finish({ ok: false, detail: "пакет не удалось отправить" });
+          }
+        });
+      },
+      /**
        * Резервная копия: собираем локально, шифруем фразой, отправляем блобом.
        *
        * Фраза никуда не уходит — сервер получает только шифротекст и прочитать
@@ -1439,6 +1517,7 @@ export function AppProvider({
       notificationsEnabled,
       displayName,
       username,
+      email,
       isAdmin,
       backgroundEnabled,
       backgroundAvailable: isBackgroundModeAvailable(),
@@ -1455,6 +1534,7 @@ export function AppProvider({
       notificationsEnabled,
       displayName,
       username,
+      email,
       isAdmin,
       backgroundEnabled,
       actions,

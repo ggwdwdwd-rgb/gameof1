@@ -15,6 +15,7 @@ import { RenameModal } from "../ui/RenameModal";
 import { describePresence } from "../ui/presence";
 import { PinSetupModal } from "../ui/PinSetupModal";
 import { PassphraseModal, type PassphraseMode } from "../ui/PassphraseModal";
+import { ClaimAccountModal, type ClaimDraft } from "../ui/ClaimAccountModal";
 import { isBiometricsSupported } from "../lock/biometrics";
 import { getCrypto } from "../crypto/sodium";
 import { clearLockConfig, loadLockConfig, saveLockConfig, type LockConfig } from "../storage/lock";
@@ -117,6 +118,7 @@ export function SettingsScreen({
     reconnect,
     displayName,
     username,
+    email,
     notificationsEnabled,
     setNotificationsEnabled,
     renameSelf,
@@ -132,6 +134,7 @@ export function SettingsScreen({
     backupNow,
     restoreFromBackup,
     fetchBackupInfo,
+    claimAccount,
   } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -163,6 +166,38 @@ export function SettingsScreen({
   // обещал бы то, чего приложение не умеет.
   const biometricsSupported = isBiometricsSupported();
   const [pinMode, setPinMode] = useState<"set" | "change" | "disable" | null>(null);
+
+  /** Окно привязки почты и пароля — для участников без аккаунта. */
+  const [claiming, setClaiming] = useState(false);
+  const [claimBusy, setClaimBusy] = useState(false);
+
+  /**
+   * Привязка аккаунта к уже существующему участнику.
+   *
+   * Никаких предупреждений и подтверждений: действие ничего не ломает и не
+   * отменяет — оно только добавляет способ войти. Отказ сервера показываем как
+   * есть, там внятные причины (занятая почта, короткий пароль).
+   */
+  const handleClaim = useCallback(
+    async (draft: ClaimDraft) => {
+      setClaimBusy(true);
+      try {
+        const result = await claimAccount(draft);
+        if (!result.ok) {
+          Alert.alert("Не привязано", result.detail);
+          return;
+        }
+        setClaiming(false);
+        Alert.alert(
+          "Почта привязана",
+          "Теперь с нового телефона можно войти этой почтой и паролем. Чтобы вместе с аккаунтом переехала и переписка, сделайте резервную копию — она ниже в настройках.",
+        );
+      } finally {
+        setClaimBusy(false);
+      }
+    },
+    [claimAccount],
+  );
 
   /** Резервная копия: какое окно фразы открыто и что известно про копию на сервере. */
   const [backupMode, setBackupMode] = useState<PassphraseMode | null>(null);
@@ -702,6 +737,60 @@ export function SettingsScreen({
           </View>
         </Card>
 
+        <SectionTitle>Аккаунт</SectionTitle>
+        <Card>
+          {email === null ? (
+            <>
+              <Pressable
+                style={({ pressed }) => [styles.row, pressed && { backgroundColor: theme.colors.surfacePressed }]}
+                onPress={() => setClaiming(true)}
+                disabled={!connected}
+              >
+                <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+                  <Icon name="shield" size={19} color={theme.colors.accent} />
+                </View>
+                <Text
+                  style={[styles.rowLabel, { color: connected ? theme.colors.textPrimary : theme.colors.textMuted }]}
+                >
+                  Привязать почту и пароль
+                </Text>
+              </Pressable>
+              <View
+                style={[
+                  styles.block,
+                  { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
+                ]}
+              >
+                {/* Это не «дополнительная возможность», а единственный способ
+                    вернуть себе доступ: вход по одноразовому коду не оставляет
+                    ничего, чем можно войти с другого телефона. */}
+                <Text style={[styles.failure, { color: theme.colors.danger, marginTop: 0 }]}>
+                  Почта не привязана — войти с другого телефона нечем.
+                </Text>
+                <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+                  Вы вошли по одноразовому коду. Пока к аккаунту не привязаны почта и пароль, потеря или сброс
+                  телефона означает потерю доступа: переписка расшифровывается ключами устройства, и восстановить
+                  их нечем.
+                </Text>
+                <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+                  Привязка ничего не меняет: аккаунт, переписка, контакты и @тег остаются те же. Добавляется только
+                  способ войти.
+                </Text>
+              </View>
+            </>
+          ) : (
+            <View style={styles.block}>
+              <DiagRow label="Почта" value={email} theme={theme} />
+              <DiagRow label="Тег" value={username === null ? "нет" : `@${username}`} theme={theme} />
+              <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+                Этой почтой и паролем вы войдёте с нового телефона: аккаунт, @тег и контакты вернутся. Переписку
+                вернёт резервная копия ниже — пароль её не расшифровывает, и сервер не может прочитать её ни с
+                паролем, ни без него.
+              </Text>
+            </View>
+          )}
+        </Card>
+
         <SectionTitle>Резервная копия</SectionTitle>
         <Card>
           <Pressable
@@ -970,6 +1059,14 @@ export function SettingsScreen({
             });
           })();
         }}
+      />
+
+      <ClaimAccountModal
+        visible={claiming}
+        busy={claimBusy}
+        suggestedUsername={username}
+        onCancel={() => setClaiming(false)}
+        onSubmit={(draft) => void handleClaim(draft)}
       />
 
       <PassphraseModal

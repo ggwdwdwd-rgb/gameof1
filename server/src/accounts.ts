@@ -418,6 +418,79 @@ export function isContact(ownerId: string, contactId: string): boolean {
   return row !== undefined;
 }
 
+export interface ClaimInput {
+  email: string;
+  password: string;
+  username: string;
+  phone?: string | undefined;
+}
+
+export type ClaimResult =
+  | { ok: true; account: Account }
+  | { ok: false; code: ValidationError | "ALREADY_HAS_PASSWORD" };
+
+/**
+ * Привязка почты и пароля к УЖЕ существующему участнику.
+ *
+ * Зачем отдельно от register: участники, заведённые одноразовым кодом до
+ * появления аккаунтов, остались без почты и пароля. Восстановить доступ им
+ * нечем — потерянный телефон означал бы потерю всего, — а register создал бы
+ * НОВОГО человека с новым userId, то есть отобрал бы у них контакты и
+ * переписку. Здесь же меняется только сам аккаунт: userId, устройство, контакты
+ * и история остаются на месте.
+ *
+ * Права на это даёт уже пройденная аутентификация устройства: подпись ключом,
+ * который никогда не покидал телефон, — доказательство сильнее любого пароля,
+ * которого у человека пока нет.
+ *
+ * Смену уже существующего пароля намеренно не делаем: она обязана требовать
+ * прежний пароль, иначе украденный разблокированный телефон означал бы
+ * захваченный аккаунт. Это отдельная задача, а не побочный эффект этой.
+ */
+export async function claimAccount(userId: string, input: ClaimInput): Promise<ClaimResult> {
+  const current = accountOf(userId);
+  if (!current) return { ok: false, code: "BAD_EMAIL" };
+
+  const existing = db.prepare("SELECT password_hash FROM users WHERE id = ?").get(userId) as
+    | { password_hash: string | null }
+    | undefined;
+  if (existing?.password_hash) return { ok: false, code: "ALREADY_HAS_PASSWORD" };
+
+  const email = normalizeEmail(input.email);
+  const username = normalizeUsername(input.username);
+
+  if (!EMAIL_RE.test(email)) return { ok: false, code: "BAD_EMAIL" };
+  if (!USERNAME_RE.test(username)) return { ok: false, code: "BAD_USERNAME" };
+  if (input.password.length < MIN_PASSWORD_LENGTH) return { ok: false, code: "WEAK_PASSWORD" };
+
+  const byEmail = findByEmail(email);
+  if (byEmail && byEmail.userId !== userId) return { ok: false, code: "EMAIL_TAKEN" };
+  const byUsername = findByUsername(username);
+  if (byUsername && byUsername.userId !== userId) return { ok: false, code: "USERNAME_TAKEN" };
+
+  // Хэш считаем до записи: Argon2id занимает около секунды.
+  const passwordHash = await hashPassword(input.password);
+  const phone = input.phone?.trim();
+
+  try {
+    db.prepare(
+      `UPDATE users SET email = ?, password_hash = ?, username = ?, phone = COALESCE(?, phone)
+       WHERE id = ?`,
+    ).run(email, passwordHash, username, phone === undefined || phone === "" ? null : phone, userId);
+  } catch (error) {
+    // Гонка: почту или тег заняли между проверкой и записью. Уникальные индексы —
+    // единственная надёжная защита, проверки выше лишь дают внятный отказ.
+    const message = error instanceof Error ? error.message : "";
+    if (/idx_users_email/.test(message)) return { ok: false, code: "EMAIL_TAKEN" };
+    if (/idx_users_username/.test(message)) return { ok: false, code: "USERNAME_TAKEN" };
+    throw error;
+  }
+
+  const account = accountOf(userId);
+  if (!account) throw new Error("аккаунт исчез сразу после привязки");
+  return { ok: true, account: { ...account, isAdmin: isAdmin(userId) } };
+}
+
 /** Смена своего @тега. null — тег занят или не подходит. */
 export function setUsername(userId: string, username: string): ValidationError | null {
   const next = normalizeUsername(username);
