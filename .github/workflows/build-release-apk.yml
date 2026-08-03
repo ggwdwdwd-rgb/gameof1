@@ -1,0 +1,149 @@
+name: Build release APK (EAS)
+
+# Релизная сборка — та, что раздаётся людям. Отличается от preview тем, что
+# versionCode увеличивает сам EAS (autoIncrement в eas.json), поэтому Android
+# видит её как обновление, а в настройках → Диагностика видно, кто обновился.
+#
+# Ключ подписи тот же, что у preview-сборок: он один на проект (см. docs/BUILD.md
+# §0 и §2). Поэтому релиз ставится поверх уже установленного APK как обновление,
+# и ни ключи в Keystore, ни переписка не теряются.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # Проверки отдельной задачей и до сборки: релиз раздаётся людям, и собрать
+  # заведомо сломанный бандл дороже, чем подождать пять минут. Сборка не
+  # запустится, если что-то из этого упало.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Крипто-пакет и его тесты
+        run: |
+          cd packages/crypto
+          npm install
+          npm run build
+          npm test
+
+      - name: Зависимости клиента
+        run: |
+          cd app
+          npm install
+
+      - name: Проверки клиента
+        working-directory: app
+        run: |
+          npx tsc --noEmit
+          npm run check:sql
+          npm run check:imports
+          npm run check:android
+
+      - name: Сборка бандла (проверка, что Metro не падает)
+        working-directory: app
+        run: npx expo export --platform android --output-dir /tmp/export-check
+
+      - name: Сервер — типы и сборка
+        run: |
+          cd server
+          npm install
+          npx tsc --noEmit
+          npm run build
+
+  build:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Собрать общий крипто-пакет
+        run: |
+          cd packages/crypto
+          npm install
+          npm run build
+
+      - name: Установить зависимости клиента
+        run: |
+          cd app
+          npm install
+
+      - name: Привязать/создать EAS-проект (нужно перед non-interactive build)
+        working-directory: app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx eas-cli@latest init --non-interactive --force
+
+      - name: Запустить EAS Build (production, Android)
+        working-directory: app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          # Без set +e шаг падает раньше, чем мы успеваем показать JSON с
+          # причиной отказа, и в логе GitHub остаётся только "Build failed".
+          set +e
+          npx eas-cli@latest build --platform android --profile production --non-interactive --wait --json > ../eas-build-result.json
+          code=$?
+          echo "--- eas-build-result.json ---"
+          cat ../eas-build-result.json || true
+          if [ "$code" -ne 0 ]; then
+            echo "--- причина отказа последней сборки на стороне EAS ---"
+            npx eas-cli@latest build:list --limit 1 --json --non-interactive || true
+          fi
+          exit "$code"
+
+      - name: Скачать APK
+        run: |
+          URL=$(jq -r '.[0].artifacts.buildUrl' eas-build-result.json)
+          VERSION=$(jq -r '.[0].appBuildVersion // "?"' eas-build-result.json)
+          echo "APK URL: $URL (versionCode $VERSION)"
+          echo "VERSION_CODE=$VERSION" >> "$GITHUB_ENV"
+          curl -L -o cry.apk "$URL"
+
+      - name: Опубликовать в GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-${{ github.run_number }}
+          name: "Cry — релиз #${{ github.run_number }} (versionCode ${{ env.VERSION_CODE }})"
+          body: |
+            Релизный Android APK (EAS Build, профиль `production`), собрано из
+            коммита ${{ github.sha }}. Перед сборкой прошли тесты крипто-пакета,
+            проверки клиента и сборка бандла.
+
+            **Ставится поверх прежней версии как обновление** — ключ подписи тот
+            же, что у preview-сборок. Удалять приложение не нужно и не следует:
+            удаление уносит ключи из Keystore вместе со всей перепиской
+            (docs/BUILD.md §0).
+
+            **Сначала обнови сервер**, иначе часть возможностей не заработает:
+
+            ```
+            cd ~/family-messenger && git pull
+            NODE_IMAGE=mirror.gcr.io/library/node:20-bookworm \
+            NODE_SLIM_IMAGE=mirror.gcr.io/library/node:20-bookworm-slim \
+            docker compose up -d --build
+            ```
+
+            **После установки — два дела, каждому:**
+
+            1. Настройки → **Аккаунт** → «Привязать почту и пароль». Пока их нет,
+               потеря телефона означает потерю доступа навсегда.
+            2. Настройки → **Резервная копия** → «Создать копию» с кодовой фразой.
+               Только она возвращает переписку на новом телефоне: ключи
+               расшифровки не покидают прежний, и сервер помочь не может.
+          files: cry.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
