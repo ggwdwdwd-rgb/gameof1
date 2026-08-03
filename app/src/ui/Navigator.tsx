@@ -1,6 +1,7 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { Animated, Easing, StyleSheet, useWindowDimensions, View } from "react-native";
 import { useTheme } from "../theme/ThemeContext";
+import { clearTransition, navLayout, type NavDirection } from "./navigatorLayout";
 
 /**
  * Переход между экранами с параллаксом — как в Telegram и вообще в iOS-навигации.
@@ -19,7 +20,7 @@ import { useTheme } from "../theme/ThemeContext";
  * рендером, поэтому «стек» здесь ровно один кадр глубиной. Больше и не нужно:
  * анимируется только тот переход, который человек видит прямо сейчас.
  */
-export type NavDirection = "push" | "pop" | "modal";
+export type { NavDirection };
 
 /** Длительность подобрана под ощущение iOS-навигации: короче кажется дёрганым. */
 const DURATION = 280;
@@ -29,6 +30,25 @@ const EASE = Easing.bezier(0.2, 0, 0, 1);
 interface Snapshot {
   key: string;
   node: React.ReactNode;
+}
+
+/**
+ * Идущий переход одним состоянием.
+ *
+ * Одним — принципиально. Сначала уходящий экран лежал в состоянии, а
+ * направление в рефе, и это давало настоящий баг: изменение рефа не вызывает
+ * перерисовку, поэтому первый кадр перехода считался по геометрии ПРЕДЫДУЩЕГО
+ * направления. При нажатии «назад» входящий экран на кадр ставился за правый
+ * край, слои шли в обратном порядке — и под ними мелькала пустота, то есть
+ * чёрный экран.
+ *
+ * `id` — номер перехода. По нему поздний ответ прерванной анимации отличается
+ * от ответа текущей: снимать уходящий экран может только та, что ещё идёт.
+ */
+interface Transition {
+  id: number;
+  leaving: Snapshot;
+  dir: NavDirection;
 }
 
 export function Navigator({
@@ -47,13 +67,13 @@ export function Navigator({
   /** Последнее, что мы отрисовали: из него берётся уходящий экран. */
   const latest = useRef<Snapshot>({ key: screenKey, node: children });
   /**
-   * Замороженный уходящий экран. Именно замороженный: он больше не
-   * перерисовывается, и это правильно — переход длится 280 мс, а лишние
-   * обновления экрана, который уже уезжает, только грузят JS-поток.
+   * Идущий переход: замороженный уходящий экран и направление вместе.
+   *
+   * Уходящий заморожен намеренно — переход длится 280 мс, и перерисовывать
+   * экран, который уже уезжает, незачем.
    */
-  const [leaving, setLeaving] = useState<Snapshot | null>(null);
-  /** Направление на момент начала перехода: пока он идёт, менять его нельзя. */
-  const playing = useRef<NavDirection>(direction);
+  const [transition, setTransition] = useState<Transition | null>(null);
+  const counter = useRef(0);
   const progress = useRef(new Animated.Value(1)).current;
 
   useLayoutEffect(() => {
@@ -61,33 +81,35 @@ export function Navigator({
       latest.current = { key: screenKey, node: children };
       return;
     }
-    setLeaving(latest.current);
+    const id = counter.current + 1;
+    counter.current = id;
+    setTransition({ id, leaving: latest.current, dir: direction });
     latest.current = { key: screenKey, node: children };
-    playing.current = direction;
     progress.setValue(0);
-    Animated.timing(progress, { toValue: 1, duration: DURATION, easing: EASE, useNativeDriver: true }).start(
-      ({ finished }) => {
-        // Только при честном завершении: прерванную анимацию догонит следующий
-        // переход, и снятие уходящего экрана здесь оборвало бы его на середине.
-        if (finished) setLeaving(null);
-      },
-    );
+    Animated.timing(progress, { toValue: 1, duration: DURATION, easing: EASE, useNativeDriver: true }).start(() => {
+      // Снимается и доигравший переход, и прерванный — см. clearTransition.
+      setTransition((current) => clearTransition(current, id));
+    });
   }, [screenKey, children, direction, progress]);
 
-  const dir = playing.current;
+  // Направление берём из состояния перехода, а не из пропа: пока переход идёт,
+  // менять его нельзя, а вне перехода оно всё равно ни на что не влияет.
+  const dir = transition?.dir ?? direction;
+  const leaving = transition?.leaving ?? null;
 
-  // Входящий экран.
-  const enterFrom = dir === "push" ? width : dir === "pop" ? -width * 0.25 : 0;
-  const enterX = progress.interpolate({ inputRange: [0, 1], outputRange: [enterFrom, 0] });
-  const enterY = progress.interpolate({ inputRange: [0, 1], outputRange: [dir === "modal" ? height * 0.28 : 0, 0] });
+  // Геометрия — из navigatorLayout: она чистая и проверяется скриптом
+  // (npm run check:nav), потому что именно в ней был чёрный экран.
+  const geometry = navLayout(dir, width, height);
+  const between = (range: { from: number; to: number }): Animated.AnimatedInterpolation<number> =>
+    progress.interpolate({ inputRange: [0, 1], outputRange: [range.from, range.to] });
+
+  const enterX = between(geometry.enterX);
+  const enterY = between(geometry.enterY);
   // Возврат — это «снятие верхнего слоя», и нижний не должен проявляться из
-  // прозрачности: он всё время был там. Прозрачность анимируем только у
-  // модального.
-  const enterOpacity = dir === "modal" ? progress : 1;
+  // прозрачности: он всё время был там.
+  const enterOpacity = geometry.enterFade ? progress : 1;
 
-  // Уходящий экран.
-  const leaveTo = dir === "push" ? -width * 0.25 : dir === "pop" ? width : 0;
-  const leaveX = progress.interpolate({ inputRange: [0, 1], outputRange: [0, leaveTo] });
+  const leaveX = between(geometry.leaveX);
   const leaveOpacity =
     dir === "push"
       ? progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] })
@@ -100,37 +122,17 @@ export function Navigator({
   // Наверху тот экран, который «ближе к человеку»: при переходе вперёд это
   // входящий (он наезжает), при возврате — уходящий (он уезжает, открывая
   // лежащий под ним).
-  const leavingOnTop = dir === "pop";
-  const shadow = {
-    shadowColor: "#000",
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    shadowOffset: { width: -3, height: 0 },
-    elevation: 12,
-  };
+  const leavingOnTop = geometry.leavingOnTop;
 
-  /**
-   * Слои собираем МАССИВОМ с ключами, а не парой соседних элементов.
-   *
-   * Это не косметика. React сопоставляет соседей по позиции, и появление
-   * уходящего слоя перед текущим сдвинуло бы позиции — уходящий экран
-   * пересоздался бы с нуля: его эффекты запустились бы заново, а список
-   * сообщений мигнул бы пустым ровно тогда, когда его видно, то есть во время
-   * анимации. В массиве сопоставление идёт по ключу, поэтому оба экрана
-   * сохраняют свои экземпляры: один продолжает жить, второй просто монтируется.
-   */
-  const layers: React.ReactNode[] = [];
-
-  if (leaving !== null) {
-    layers.push(
+  const leavingLayer =
+    leaving === null ? null : (
       <Animated.View
         key={leaving.key}
         pointerEvents="none"
         style={[
           styles.layer,
-          leavingOnTop ? shadow : null,
+          leavingOnTop ? styles.shadow : null,
           {
-            zIndex: leavingOnTop ? 2 : 1,
             backgroundColor: theme.colors.background,
             opacity: leaveOpacity,
             transform: [{ translateX: leaveX }, { scale: leaveScale }],
@@ -138,20 +140,18 @@ export function Navigator({
         ]}
       >
         {leaving.node}
-      </Animated.View>,
+      </Animated.View>
     );
-  }
 
-  layers.push(
+  const currentLayer = (
     <Animated.View
       key={screenKey}
       style={[
         styles.layer,
         // Тень по левому краю — то, что делает переход «слоями». Без неё два
         // экрана выглядят одной плоской картинкой, разрезанной пополам.
-        leaving !== null && !leavingOnTop ? shadow : null,
+        leaving !== null && !leavingOnTop ? styles.shadow : null,
         {
-          zIndex: leavingOnTop ? 1 : 2,
           backgroundColor: theme.colors.background,
           opacity: enterOpacity,
           transform: [{ translateX: enterX }, { translateY: enterY }],
@@ -159,8 +159,14 @@ export function Navigator({
       ]}
     >
       {children}
-    </Animated.View>,
+    </Animated.View>
   );
+
+  // Порядком в массиве, а не zIndex: на Android zIndex у абсолютных соседей
+  // спорит с elevation (тенью), и кто окажется сверху, зависит от их сочетания.
+  // Порядок отрисовки однозначен, а переупаковка массива экземпляры не рушит —
+  // React сопоставляет детей по ключу, а не по месту.
+  const layers = leavingOnTop ? [currentLayer, leavingLayer] : [leavingLayer, currentLayer];
 
   return <View style={[styles.root, { backgroundColor: theme.colors.background }]}>{layers}</View>;
 }
@@ -168,4 +174,11 @@ export function Navigator({
 const styles = StyleSheet.create({
   root: { flex: 1 },
   layer: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
+  shadow: {
+    shadowColor: "#000",
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    shadowOffset: { width: -3, height: 0 },
+    elevation: 12,
+  },
 });

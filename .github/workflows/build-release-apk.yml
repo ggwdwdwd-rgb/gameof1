@@ -46,6 +46,7 @@ jobs:
           npm run check:sql
           npm run check:imports
           npm run check:android
+          npm run check:nav
 
       - name: Сборка бандла (проверка, что Metro не падает)
         working-directory: app
