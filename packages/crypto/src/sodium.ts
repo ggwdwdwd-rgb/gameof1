@@ -42,6 +42,10 @@ export interface SodiumLike {
     algorithm: number,
   ): Uint8Array;
 
+  /** Симметричное шифрование — для резервной копии переписки (см. backup.ts). */
+  crypto_secretbox_easy(message: Uint8Array, nonce: Uint8Array, key: Uint8Array): Uint8Array;
+  crypto_secretbox_open_easy(ciphertext: Uint8Array, nonce: Uint8Array, key: Uint8Array): Uint8Array;
+
   randombytes_buf(length: number): Uint8Array;
 
   to_base64(input: Uint8Array): string;
@@ -54,4 +58,6 @@ export interface SodiumLike {
   readonly crypto_pwhash_OPSLIMIT_INTERACTIVE: number;
   readonly crypto_pwhash_MEMLIMIT_INTERACTIVE: number;
   readonly crypto_pwhash_ALG_ARGON2ID13: number;
+
+  readonly crypto_secretbox_NONCEBYTES: number;
 }

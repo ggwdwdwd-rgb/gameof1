@@ -114,11 +114,25 @@ check("удаление не главного со старыми правами
 const devicesBefore = users.deviceIdsOf(oldId);
 check("устройства участника находятся", devicesBefore.length === 1, devicesBefore.join(","));
 
+// Резервная копия тоже ссылается на users. Внешние ключи в базе включены, и без
+// её удаления транзакция валится — это уже случалось с contacts, поэтому
+// проверяем явно.
+db.prepare("INSERT INTO backups (user_id, blob, size_bytes, updated_at) VALUES (?, ?, ?, ?)").run(
+  oldId,
+  '{"v":1,"salt":"x","nonce":"y","ciphertext":"z"}',
+  46,
+  4000,
+);
+
 const stats = users.removeUser(oldId);
 check("удалено устройство", stats.devices === 1, String(stats.devices));
 check("удалено сообщение", stats.messages === 1, String(stats.messages));
 check("удалена квитанция", stats.receipts === 1, String(stats.receipts));
 check("участника больше нет", !users.userExists(oldId));
+check(
+  "резервная копия удалена вместе с ним",
+  db.prepare("SELECT COUNT(*) AS n FROM backups WHERE user_id = ?").get(oldId).n === 0,
+);
 check("остальные участники на месте", users.userExists(peerId) && users.userExists(newId));
 check("главный не изменился", users.isAdmin(newId) && users.adminCount() === 1);
 
@@ -135,6 +149,7 @@ db.prepare("DELETE FROM messages").run();
 // аккаунтами и ссылается на users, а внешние ключи в базе включены — без этого
 // удаление участников падало с FOREIGN KEY constraint failed.
 db.prepare("DELETE FROM contacts").run();
+db.prepare("DELETE FROM backups").run();
 db.prepare("DELETE FROM devices").run();
 db.prepare("DELETE FROM users").run();
 const freshId = randomUUID();

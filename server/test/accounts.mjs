@@ -314,6 +314,74 @@ bobPhone2.received = bobPhone2.received.filter((m) => m.type !== "user.found");
 bobPhone2.send("user.search", { query: alice.username });
 check("по прежнему тегу больше никого нет", (await bobPhone2.wait("user.found")).payload.user === null);
 
+// ── 10. Резервная копия переписки ──────────────────────────────────────────
+//
+// Проверяем ровно то, за что отвечает сервер: он хранит блоб как есть, отдаёт
+// его только владельцу и не даёт превысить предел. Сама криптография копии
+// проверяется в packages/crypto (там же, где остальные примитивы), но блоб
+// здесь настоящий: если бы формат ломался при проходе через сервер (например
+// на длине или на кодировке), это осталось бы незамеченным.
+//
+// Argon2id есть только в sumo-сборке libsodium — в обычной crypto_pwhash нет.
+const sodiumSumo = require_("libsodium-wrappers-sumo");
+await sodiumSumo.ready;
+const cryptoSumo = createCrypto(sodiumSumo);
+
+const PASSPHRASE = "четыре несвязанных слова подряд";
+const history = JSON.stringify({ v: 1, createdAt: Date.now(), messages: [{ text: "привет, копия" }], contacts: [] });
+const blob = JSON.stringify(cryptoSumo.encryptBackup(history, PASSPHRASE));
+
+alice.received = alice.received.filter((m) => m.type !== "backup.ok");
+alice.send("backup.put", { blob });
+const put = await alice.wait("backup.ok");
+check("копия принята сервером", put.payload.sizeBytes === Buffer.byteLength(blob, "utf-8"), String(put.payload.sizeBytes));
+
+alice.received = alice.received.filter((m) => m.type !== "backup.info.ok");
+alice.send("backup.info", {});
+const info = await alice.wait("backup.info.ok");
+check("сведения о копии без выгрузки блоба", info.payload.updatedAt > 0 && info.payload.sizeBytes > 0);
+
+alice.received = alice.received.filter((m) => m.type !== "backup.blob");
+alice.send("backup.get", {});
+const got = await alice.wait("backup.blob");
+check("копия вернулась байт в байт", got.payload.blob === blob);
+check(
+  "и расшифровалась своей фразой",
+  cryptoSumo.decryptBackup(JSON.parse(got.payload.blob), PASSPHRASE) === history,
+);
+check(
+  "чужой фразой не расшифровалась",
+  cryptoSumo.decryptBackup(JSON.parse(got.payload.blob), "совершенно другая длинная фраза") === null,
+);
+
+// Копия — личная: у Боба своя, и она не может оказаться алисиной.
+bobPhone2.received = bobPhone2.received.filter((m) => m.type !== "backup.blob");
+bobPhone2.send("backup.get", {});
+check("чужую копию не отдают", (await bobPhone2.wait("backup.blob")).payload.blob === null);
+
+// Предел размера: без него один участник забил бы диск сервера, и сообщения
+// перестали бы ходить у всех.
+alice.received = alice.received.filter((m) => m.type !== "error");
+alice.send("backup.put", { blob: "x".repeat(8 * 1024 * 1024 + 1) });
+check("слишком большая копия отклонена", (await alice.wait("error", (m) => m.payload.code === "TOO_LARGE")).payload.code === "TOO_LARGE");
+
+alice.received = alice.received.filter((m) => m.type !== "error");
+alice.send("backup.put", { blob: "" });
+check("пустая копия отклонена", (await alice.wait("error", (m) => m.payload.code === "EMPTY")).payload.code === "EMPTY");
+
+// Отказ не должен затирать уже лежащую копию: иначе неудачная попытка сохранить
+// новую версию оставляла бы человека вообще без копии.
+alice.received = alice.received.filter((m) => m.type !== "backup.blob");
+alice.send("backup.get", {});
+check("прежняя копия цела после отказов", (await alice.wait("backup.blob")).payload.blob === blob);
+
+alice.received = alice.received.filter((m) => m.type !== "backup.ok");
+alice.send("backup.delete", {});
+await alice.wait("backup.ok");
+alice.received = alice.received.filter((m) => m.type !== "backup.info.ok");
+alice.send("backup.info", {});
+check("после удаления копии нет", (await alice.wait("backup.info.ok")).payload.updatedAt === null);
+
 alice.ws.close();
 bobPhone2.ws.close();
 

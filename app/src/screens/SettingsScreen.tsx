@@ -14,6 +14,7 @@ import { Icon, type IconName } from "../ui/Icon";
 import { RenameModal } from "../ui/RenameModal";
 import { describePresence } from "../ui/presence";
 import { PinSetupModal } from "../ui/PinSetupModal";
+import { PassphraseModal, type PassphraseMode } from "../ui/PassphraseModal";
 import { isBiometricsSupported } from "../lock/biometrics";
 import { getCrypto } from "../crypto/sodium";
 import { clearLockConfig, loadLockConfig, saveLockConfig, type LockConfig } from "../storage/lock";
@@ -21,7 +22,18 @@ import { buildLabel } from "../util/buildInfo";
 import { getPermissionState, requestPermission, showTest } from "../notify/notifications";
 import { BACKGROUND_RUN_SETTING } from "../background/task";
 import { getSetting } from "../db/settings";
-import type { SelfTestStep } from "../context/AppContext";
+import type { BackupState, SelfTestStep } from "../context/AppContext";
+
+/** «12 июля, 18:40 · 240 КБ» — одной строкой под кнопками копии. */
+function describeBackup(state: BackupState): string {
+  if (state.state === "unknown") return "неизвестно — нет связи с сервером";
+  if (state.state === "none") return "копии ещё нет";
+  const size =
+    state.sizeBytes < 1024 * 1024
+      ? `${Math.max(1, Math.round(state.sizeBytes / 1024))} КБ`
+      : `${(state.sizeBytes / (1024 * 1024)).toFixed(1)} МБ`;
+  return `${new Date(state.updatedAt).toLocaleString("ru-RU")} · ${size}`;
+}
 
 /** «5 мин назад» из отметки о запуске фоновой задачи. */
 function describeBackgroundRun(stored: string | null): string {
@@ -117,6 +129,9 @@ export function SettingsScreen({
     backgroundEnabled,
     backgroundAvailable,
     setBackgroundEnabled,
+    backupNow,
+    restoreFromBackup,
+    fetchBackupInfo,
   } = useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -148,6 +163,15 @@ export function SettingsScreen({
   // обещал бы то, чего приложение не умеет.
   const biometricsSupported = isBiometricsSupported();
   const [pinMode, setPinMode] = useState<"set" | "change" | "disable" | null>(null);
+
+  /** Резервная копия: какое окно фразы открыто и что известно про копию на сервере. */
+  const [backupMode, setBackupMode] = useState<PassphraseMode | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupState, setBackupState] = useState<BackupState>({ state: "unknown" });
+
+  const refreshBackup = useCallback(async () => {
+    setBackupState(await fetchBackupInfo());
+  }, [fetchBackupInfo]);
 
   const refreshLock = useCallback(async () => {
     setLock(await loadLockConfig());
@@ -213,6 +237,55 @@ export function SettingsScreen({
     void getPermissionState().then((state) => setPermissionDenied(state === "denied"));
     void refreshDiag();
   }, [refreshDiag]);
+
+  // Про копию спрашиваем, когда соединение уже есть: без него сервер не ответит,
+  // и строка навсегда осталась бы «неизвестно».
+  useEffect(() => {
+    if (connected) void refreshBackup();
+  }, [connected, refreshBackup]);
+
+  /**
+   * Создание копии и восстановление из неё.
+   *
+   * Обе операции долгие: Argon2id на телефоне считается около секунды, а блоб
+   * может быть на мегабайты. Окно фразы держим открытым и заблокированным всё
+   * это время — иначе человек нажмёт «Создать» второй раз, не поняв, идёт ли
+   * что-то вообще.
+   */
+  const handlePassphrase = useCallback(
+    async (mode: PassphraseMode, passphrase: string) => {
+      setBackupBusy(true);
+      try {
+        if (mode === "create") {
+          const result = await backupNow(passphrase);
+          if (!result.ok) {
+            Alert.alert("Копия не создана", result.detail);
+            return;
+          }
+          Alert.alert(
+            "Копия создана",
+            `В копию попало ${result.messages} сообщений. Запишите фразу: без неё копию не открыть, и восстановить её нечем.`,
+          );
+          await refreshBackup();
+          return;
+        }
+        const result = await restoreFromBackup(passphrase);
+        if (!result.ok) {
+          Alert.alert("Не восстановлено", result.detail);
+          return;
+        }
+        Alert.alert(
+          "Переписка восстановлена",
+          `Добавлено ${result.messages} сообщений и ${result.contacts} контактов. Сообщения, пришедшие уже после создания копии, в неё не попали — вернуть их нечем: сервер удаляет их после доставки.`,
+        );
+        await refreshDiag();
+      } finally {
+        setBackupBusy(false);
+        setBackupMode(null);
+      }
+    },
+    [backupNow, restoreFromBackup, refreshBackup, refreshDiag],
+  );
 
   const handleSaveName = useCallback(async () => {
     setSavingName(true);
@@ -629,6 +702,61 @@ export function SettingsScreen({
           </View>
         </Card>
 
+        <SectionTitle>Резервная копия</SectionTitle>
+        <Card>
+          <Pressable
+            style={({ pressed }) => [styles.row, pressed && { backgroundColor: theme.colors.surfacePressed }]}
+            onPress={() => setBackupMode("create")}
+            disabled={!connected}
+          >
+            <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+              <Icon name="copy" size={19} color={theme.colors.accent} />
+            </View>
+            <Text
+              style={[styles.rowLabel, { color: connected ? theme.colors.textPrimary : theme.colors.textMuted }]}
+            >
+              Создать копию
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.row,
+              { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider },
+              pressed && { backgroundColor: theme.colors.surfacePressed },
+            ]}
+            onPress={() => setBackupMode("restore")}
+            disabled={!connected}
+          >
+            <View style={[styles.rowIcon, { backgroundColor: theme.colors.accentSoft }]}>
+              <Icon name="download" size={19} color={theme.colors.accent} />
+            </View>
+            <Text
+              style={[styles.rowLabel, { color: connected ? theme.colors.textPrimary : theme.colors.textMuted }]}
+            >
+              Восстановить из копии
+            </Text>
+          </Pressable>
+
+          <View style={[styles.block, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.divider }]}>
+            <DiagRow label="Последняя копия" value={describeBackup(backupState)} theme={theme} />
+            <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+              Копия нужна для входа с нового телефона: сообщения расшифровываются ключами устройства, а они остаются на
+              прежнем — сервер помочь не может даже теоретически. Копия шифруется кодовой фразой прямо здесь, и на сервер
+              уходит уже шифротекстом.
+            </Text>
+            <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+              Фраза никуда не отправляется и не восстанавливается — забыть её значит потерять копию. В копию попадает
+              текст сообщений и контакты; фотографии и голосовые — нет, они остались бы сотнями мегабайт на сервере, и в
+              восстановленной переписке от них будут только подписи.
+            </Text>
+            <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+              Восстановление дописывает то, чего в базе нет, и ничего не стирает. Сообщения, пришедшие после последней
+              копии, в неё не попали, и вернуть их нечем: сервер удаляет их сразу после доставки.
+            </Text>
+          </View>
+        </Card>
+
         <SectionTitle>Безопасность</SectionTitle>
         <Card>
           <View style={styles.block}>
@@ -841,6 +969,17 @@ export function SettingsScreen({
               graceSec: mode === "change" ? (lock?.graceSec ?? 60) : 60,
             });
           })();
+        }}
+      />
+
+      <PassphraseModal
+        visible={backupMode !== null}
+        mode={backupMode ?? "create"}
+        busy={backupBusy}
+        onCancel={() => setBackupMode(null)}
+        onSubmit={(passphrase) => {
+          const mode = backupMode;
+          if (mode !== null) void handlePassphrase(mode, passphrase);
         }}
       />
 

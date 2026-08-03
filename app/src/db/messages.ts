@@ -109,6 +109,19 @@ export async function hardDeleteMessage(clientMsgId: string): Promise<void> {
   await db.runAsync("DELETE FROM messages WHERE client_msg_id = ?", [clientMsgId]);
 }
 
+/**
+ * Все сообщения — для резервной копии.
+ *
+ * Без лимита намеренно: копия должна содержать переписку целиком, иначе она не
+ * копия. Предел ставит сервер по размеру блоба (8 МБ), и до него это десятки
+ * тысяч сообщений.
+ */
+export async function listAllMessages(): Promise<LocalMessage[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<MessageRow>("SELECT * FROM messages ORDER BY created_at ASC");
+  return rows.map(fromRow);
+}
+
 /** Сколько сообщений всего лежит локально — для диагностики. */
 export async function countMessages(): Promise<number> {
   const db = await getDb();

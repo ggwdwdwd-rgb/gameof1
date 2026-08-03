@@ -1,6 +1,7 @@
 // Импорты без .js-расширений: пакет резолвится Metro напрямую из исходников
 // (см. package.json), а Metro, в отличие от tsc, не подменяет .js на .ts.
 import { boxEncrypt, boxOpen } from "./channel";
+import { decryptBackup, encryptBackup, type EncryptedBackup } from "./backup";
 import { computeFingerprint } from "./fingerprint";
 import { generateEncryptionKeyPair, generateIdentityKeyPair } from "./keys";
 import { generatePinSalt, hashPin, verifyPin } from "./pin";
@@ -8,6 +9,7 @@ import type { SodiumLike } from "./sodium";
 import { signDetached, verifyDetached } from "./signing";
 
 export type { Base64, EncryptedPayload, KeyPair } from "./types";
+export type { EncryptedBackup } from "./backup";
 export type { SodiumLike } from "./sodium";
 
 /**
@@ -33,6 +35,10 @@ export function createCrypto(sodium: SodiumLike) {
     generatePinSalt: () => generatePinSalt(sodium),
     hashPin: (pin: string, saltB64: string) => hashPin(sodium, pin, saltB64),
     verifyPin: (pin: string, saltB64: string, hashB64: string) => verifyPin(sodium, pin, saltB64, hashB64),
+    /** Резервная копия переписки, зашифрованная кодовой фразой (см. backup.ts). */
+    encryptBackup: (plaintext: string, passphrase: string) => encryptBackup(sodium, plaintext, passphrase),
+    /** null — фраза не подходит либо копия испорчена. */
+    decryptBackup: (backup: EncryptedBackup, passphrase: string) => decryptBackup(sodium, backup, passphrase),
   };
 }
 

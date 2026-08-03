@@ -458,3 +458,90 @@ describe("PIN-код блокировки", () => {
     expect(onDevice.verifyPin("9138", salt, hash)).toBe(false);
   });
 });
+
+/**
+ * Резервная копия переписки, зашифрованная кодовой фразой.
+ *
+ * Проверяется обвязка, а не Argon2id с secretbox: что фраза действительно
+ * нужна, что копия не расшифровывается ничем другим, что подмена шифротекста
+ * ловится, и что всё это работает на наборе функций нативной сборки. Ошибка
+ * здесь означает либо потерянную переписку, либо копию, которую можно прочитать
+ * без фразы.
+ */
+describe("резервная копия переписки", () => {
+  let backupSodium: Awaited<ReturnType<typeof getSumoSodium>>;
+  let backupCrypto: ReturnType<typeof createCrypto>;
+
+  beforeAll(async () => {
+    // Та же sumo-сборка, что и для PIN: crypto_pwhash в обычной отсутствует.
+    backupSodium = await getSumoSodium();
+    backupCrypto = createCrypto(backupSodium as unknown as SodiumLike);
+  });
+
+  const HISTORY = JSON.stringify({
+    messages: [{ id: "m1", plaintext: "Привет 🔐 многострочный\nтекст" }],
+    contacts: [{ userId: "u1", displayName: "Аня" }],
+  });
+
+  it("расшифровывается своей фразой", () => {
+    const backup = backupCrypto.encryptBackup(HISTORY, "правильная кодовая фраза");
+    expect(backupCrypto.decryptBackup(backup, "правильная кодовая фраза")).toBe(HISTORY);
+  });
+
+  it("не расшифровывается другой фразой", () => {
+    const backup = backupCrypto.encryptBackup(HISTORY, "правильная кодовая фраза");
+    expect(backupCrypto.decryptBackup(backup, "правильная кодовая фразa")).toBeNull();
+    expect(backupCrypto.decryptBackup(backup, "")).toBeNull();
+  });
+
+  it("соль и nonce новые на каждую копию", () => {
+    const a = backupCrypto.encryptBackup(HISTORY, "фраза");
+    const b = backupCrypto.encryptBackup(HISTORY, "фраза");
+    expect(a.salt).not.toBe(b.salt);
+    expect(a.nonce).not.toBe(b.nonce);
+    // Один и тот же текст под одной фразой не должен давать один шифротекст:
+    // иначе по копиям было бы видно, менялась ли переписка.
+    expect(a.ciphertext).not.toBe(b.ciphertext);
+    expect(backupCrypto.decryptBackup(b, "фраза")).toBe(HISTORY);
+  });
+
+  it("подмена шифротекста ловится, а не отдаёт мусор", () => {
+    const backup = backupCrypto.encryptBackup(HISTORY, "фраза");
+    const bytes = backupSodium.from_base64(backup.ciphertext);
+    bytes[0] = bytes[0]! ^ 0xff;
+    expect(backupCrypto.decryptBackup({ ...backup, ciphertext: backupSodium.to_base64(bytes) }, "фраза")).toBeNull();
+  });
+
+  it("копия чужой версии формата не читается", () => {
+    const backup = backupCrypto.encryptBackup(HISTORY, "фраза");
+    expect(backupCrypto.decryptBackup({ ...backup, v: 2 as unknown as 1 }, "фраза")).toBeNull();
+  });
+
+  it("работает на наборе функций нативной сборки", () => {
+    const availableOnDevice = readNativeSodiumExports();
+
+    const used = new Set<string>();
+    const probe = new Proxy(backupSodium as unknown as Record<string, unknown>, {
+      get(target, prop: string) {
+        used.add(prop);
+        return target[prop];
+      },
+    }) as unknown as SodiumLike;
+    const probed = createCrypto(probe);
+    probed.decryptBackup(probed.encryptBackup(HISTORY, "фраза"), "фраза");
+    expect([...used].filter((name) => !availableOnDevice.has(name))).toEqual([]);
+
+    const deviceSodium = new Proxy(backupSodium as unknown as Record<string, unknown>, {
+      get(target, prop: string) {
+        if (!availableOnDevice.has(prop)) return undefined;
+        return target[prop];
+      },
+    }) as unknown as SodiumLike;
+    const onDevice = createCrypto(deviceSodium);
+    const backup = onDevice.encryptBackup(HISTORY, "фраза");
+    expect(onDevice.decryptBackup(backup, "фраза")).toBe(HISTORY);
+    // Копия, сделанная «на устройстве», обязана читаться и полной сборкой:
+    // иначе восстановление зависело бы от того, где её создавали.
+    expect(backupCrypto.decryptBackup(backup, "фраза")).toBe(HISTORY);
+  });
+});

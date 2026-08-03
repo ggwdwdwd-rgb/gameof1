@@ -33,6 +33,7 @@ import {
 } from "../notify/notifications";
 import { decryptDeliveredMessage, encryptForChat } from "../chat/encryption";
 import { dmChatId } from "../chat/chatId";
+import { createBackup, restoreBackup } from "../backup/backup";
 import { claimConnection, connectionOwner, releaseConnection } from "../background/owner";
 import { isBiometricsSupported } from "../lock/biometrics";
 import { isAppLocked } from "../lock/lockState";
@@ -180,9 +181,29 @@ interface AppActions {
   addContact: (user: FoundUser) => Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Смена своего @тега. */
   changeUsername: (username: string) => Promise<{ ok: true } | { ok: false; detail: string }>;
+  /** Создать резервную копию переписки и отправить её на сервер. */
+  backupNow: (passphrase: string) => Promise<{ ok: true; messages: number } | { ok: false; detail: string }>;
+  /** Восстановить переписку из копии на сервере. */
+  restoreFromBackup: (
+    passphrase: string,
+  ) => Promise<{ ok: true; messages: number; contacts: number } | { ok: false; detail: string }>;
+  /** Что известно про копию на сервере. */
+  fetchBackupInfo: () => Promise<BackupState>;
   /** Самопроверка отправки по шагам — см. runSelfTest. */
   selfTest: () => Promise<SelfTestStep[]>;
 }
+
+/**
+ * Состояние копии на сервере.
+ *
+ * «Неизвестно» — отдельный случай, а не «копии нет»: без соединения спросить
+ * некого, и показать «копии нет» значило бы напугать человека потерей того, что
+ * на сервере лежит.
+ */
+export type BackupState =
+  | { state: "unknown" }
+  | { state: "none" }
+  | { state: "ok"; updatedAt: number; sizeBytes: number };
 
 /** Найденный по тегу человек — то, что нужно, чтобы его добавить. */
 export interface FoundUser {
@@ -1111,6 +1132,124 @@ export function AppProvider({
             }
           });
           if (!ws.setUsername(next.trim())) finish({ ok: false, detail: "пакет не удалось отправить" });
+        });
+      },
+      /**
+       * Резервная копия: собираем локально, шифруем фразой, отправляем блобом.
+       *
+       * Фраза никуда не уходит — сервер получает только шифротекст и прочитать
+       * его не может. Забытая фраза означает потерянную копию: ключ выводится
+       * только из неё.
+       */
+      async backupNow(passphrase) {
+        const ws = wsRef.current;
+        if (!ws || !(await ws.waitUntilReady(WAIT_READY_MS))) {
+          return { ok: false, detail: "нет соединения с сервером" };
+        }
+        let prepared: { blob: string; messages: number };
+        try {
+          prepared = await createBackup(passphrase);
+        } catch (error) {
+          return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+        }
+
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (result: { ok: true; messages: number } | { ok: false; detail: string }): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offOk();
+            offError();
+            resolve(result);
+          };
+          const timer = setTimeout(() => finish({ ok: false, detail: "сервер не ответил" }), 30_000);
+          const offOk = ws.events.on("backupOk", () => finish({ ok: true, messages: prepared.messages }));
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") {
+              finish({ ok: false, detail: "сервер устарел — обновите его" });
+              return;
+            }
+            if (["TOO_LARGE", "EMPTY"].includes(payload.code)) finish({ ok: false, detail: payload.message });
+          });
+          if (!ws.putBackup(prepared.blob)) finish({ ok: false, detail: "пакет не удалось отправить" });
+        });
+      },
+      async restoreFromBackup(passphrase) {
+        const ws = wsRef.current;
+        if (!ws || !(await ws.waitUntilReady(WAIT_READY_MS))) {
+          return { ok: false, detail: "нет соединения с сервером" };
+        }
+
+        // «Копии нет» и «сервер не ответил» — разные беды, и путать их нельзя:
+        // в первом случае искать нечего, во втором стоит повторить.
+        const fetched = await new Promise<{ blob: string } | { detail: string }>((resolve) => {
+          let settled = false;
+          const finish = (value: { blob: string } | { detail: string }): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offBlob();
+            offError();
+            resolve(value);
+          };
+          const timer = setTimeout(() => finish({ detail: "сервер не ответил" }), 30_000);
+          const offBlob = ws.events.on("backupBlob", (payload) =>
+            finish(payload.blob === null ? { detail: "копии на сервере нет" } : { blob: payload.blob }),
+          );
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") finish({ detail: "сервер устарел — обновите его" });
+          });
+          if (!ws.getBackup()) finish({ detail: "пакет не удалось отправить" });
+        });
+
+        if (!("blob" in fetched)) return { ok: false, detail: fetched.detail };
+        const blob = fetched.blob;
+
+        const result = await restoreBackup(blob, passphrase);
+        if (!result.ok) {
+          return {
+            ok: false,
+            detail:
+              result.code === "BAD_PASSPHRASE"
+                ? "Фраза не подходит"
+                : "Копия сделана другой версией приложения — обновите его",
+          };
+        }
+        // Перечитываем контакты: восстановление дописало их в базу напрямую.
+        contactsRef.current = await listContacts();
+        setContacts(contactsRef.current);
+        for (const contact of contactsRef.current) {
+          chatEvents.emit("messageInserted", dmChatId(identity.userId, contact.userId));
+        }
+        return { ok: true, messages: result.messages, contacts: result.contacts };
+      },
+      async fetchBackupInfo() {
+        const ws = wsRef.current;
+        if (!ws || !ws.isReady()) return { state: "unknown" };
+        return new Promise<BackupState>((resolve) => {
+          let settled = false;
+          const finish = (value: BackupState): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            offInfo();
+            offError();
+            resolve(value);
+          };
+          const timer = setTimeout(() => finish({ state: "unknown" }), 8000);
+          const offInfo = ws.events.on("backupInfo", (payload) =>
+            finish(
+              payload.updatedAt === null || payload.sizeBytes === null
+                ? { state: "none" }
+                : { state: "ok", updatedAt: payload.updatedAt, sizeBytes: payload.sizeBytes },
+            ),
+          );
+          // Старый сервер про backup.info не знает — это «неизвестно», а не «нет копии».
+          const offError = ws.events.on("errorPacket", (payload) => {
+            if (payload.code === "UNKNOWN_TYPE") finish({ state: "unknown" });
+          });
+          if (!ws.requestBackupInfo()) finish({ state: "unknown" });
         });
       },
       async setNotificationsEnabled(enabled) {

@@ -10,6 +10,7 @@ import { handleHistoryFetch, handleMsgAck, handleMsgDelete, handleMsgSend } from
 import { getContactsFor, touchLastSeen } from "./handlers/roster.js";
 import { updateDisplayName } from "./handlers/profile.js";
 import { findDevice, setDeviceRevoked } from "../devices.js";
+import { backupInfo, deleteBackup, getBackup, MAX_BACKUP_BYTES, putBackup } from "../backups.js";
 import {
   accountOf,
   contactIdsOf,
@@ -47,6 +48,7 @@ import {
   type MsgDeletePayload,
   type DeviceRevokePayload,
   type MemberRemovePayload,
+  type BackupPutPayload,
   type MsgSendPayload,
   type PresenceSetPayload,
   type ProfileUpdatePayload,
@@ -332,6 +334,60 @@ export function handleConnection(socket: WebSocket, log: FastifyBaseLogger): voi
           broadcastToUsers([payload.userId], envelope("contact.added", { user: me, online: true }));
         }
         log.info({ userId, added: payload.userId }, "контакт добавлен");
+        return;
+      }
+
+      /**
+       * Резервная копия переписки.
+       *
+       * Сервер только хранит блоб: он зашифрован кодовой фразой, которая никуда
+       * не отправляется. Прочитать копию сервер не может — тот же принцип, что с
+       * сообщениями.
+       */
+      if (parsed.type === "backup.put") {
+        const payload = parsed.payload as BackupPutPayload;
+        const result = putBackup(userId, typeof payload.blob === "string" ? payload.blob : "");
+        if (!result.ok) {
+          send(
+            socket,
+            envelope("error", {
+              code: result.code,
+              message:
+                result.code === "TOO_LARGE"
+                  ? `Копия больше ${Math.round(MAX_BACKUP_BYTES / (1024 * 1024))} МБ`
+                  : "Копия пустая",
+            }),
+          );
+          return;
+        }
+        send(socket, envelope("backup.ok", result.info));
+        log.info({ userId, sizeBytes: result.info.sizeBytes }, "сохранена резервная копия");
+        return;
+      }
+
+      if (parsed.type === "backup.get") {
+        const stored = getBackup(userId);
+        send(
+          socket,
+          envelope("backup.blob", {
+            blob: stored?.blob ?? null,
+            updatedAt: stored?.info.updatedAt ?? null,
+            sizeBytes: stored?.info.sizeBytes ?? null,
+          }),
+        );
+        return;
+      }
+
+      /** Сведения без самой копии — чтобы показать «последняя копия: …». */
+      if (parsed.type === "backup.info") {
+        const info = backupInfo(userId);
+        send(socket, envelope("backup.info.ok", { updatedAt: info?.updatedAt ?? null, sizeBytes: info?.sizeBytes ?? null }));
+        return;
+      }
+
+      if (parsed.type === "backup.delete") {
+        deleteBackup(userId);
+        send(socket, envelope("backup.ok", { sizeBytes: 0, updatedAt: 0 }));
         return;
       }
 

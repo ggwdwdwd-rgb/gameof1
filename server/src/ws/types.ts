@@ -147,6 +147,16 @@ export interface DeviceRevokePayload {
   revoked: boolean;
 }
 
+/**
+ * Загрузка резервной копии переписки.
+ *
+ * blob — зашифрованный кодовой фразой JSON. Сервер его не разбирает и прочитать
+ * не может: фраза никуда не отправляется.
+ */
+export interface BackupPutPayload {
+  blob: string;
+}
+
 /** Удаление участника из системы. Разрешено только первому зарегистрированному. */
 export interface MemberRemovePayload {
   userId: string;

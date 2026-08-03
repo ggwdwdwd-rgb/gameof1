@@ -95,6 +95,9 @@ interface WsClientEvents extends Record<string, (...args: never[]) => void> {
   userFound: (payload: UserFoundPayload) => void;
   contactAdded: (payload: ContactAddedPayload) => void;
   usernameOk: (payload: UsernameOkPayload) => void;
+  backupOk: (payload: { sizeBytes: number; updatedAt: number }) => void;
+  backupBlob: (payload: { blob: string | null; updatedAt: number | null; sizeBytes: number | null }) => void;
+  backupInfo: (payload: { updatedAt: number | null; sizeBytes: number | null }) => void;
   roster: (payload: RosterSnapshotPayload) => void;
   memberJoined: (payload: MemberJoinedPayload) => void;
   memberUpdated: (payload: MemberUpdatedPayload) => void;
@@ -246,6 +249,27 @@ export class WsClient {
     return this.rawSend(this.ws, "contact.add", { userId });
   }
 
+  /** Отправка резервной копии на сервер. Блоб зашифрован — сервер его не читает. */
+  putBackup(blob: string): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "backup.put", { blob });
+  }
+
+  getBackup(): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "backup.get", {});
+  }
+
+  requestBackupInfo(): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "backup.info", {});
+  }
+
+  deleteBackup(): boolean {
+    if (!this.ws) return false;
+    return this.rawSend(this.ws, "backup.delete", {});
+  }
+
   /** Смена своего @тега. */
   setUsername(username: string): boolean {
     if (!this.ws) return false;
@@ -339,6 +363,18 @@ export class WsClient {
         return;
       case "username.ok":
         this.events.emit("usernameOk", parsed.payload as UsernameOkPayload);
+        return;
+      case "backup.ok":
+        this.events.emit("backupOk", parsed.payload as { sizeBytes: number; updatedAt: number });
+        return;
+      case "backup.blob":
+        this.events.emit(
+          "backupBlob",
+          parsed.payload as { blob: string | null; updatedAt: number | null; sizeBytes: number | null },
+        );
+        return;
+      case "backup.info.ok":
+        this.events.emit("backupInfo", parsed.payload as { updatedAt: number | null; sizeBytes: number | null });
         return;
       case "roster.snapshot":
         this.events.emit("roster", parsed.payload as RosterSnapshotPayload);

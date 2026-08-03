@@ -136,6 +136,9 @@ export const removeUser = db.transaction((userId: string): RemovedUserStats => {
   const contacts = db
     .prepare("DELETE FROM contacts WHERE owner_id = ? OR contact_id = ?")
     .run(userId, userId).changes;
+  // Резервная копия тоже ссылается на users — без её удаления транзакция падала
+  // бы на внешнем ключе, как это уже было с контактами.
+  db.prepare("DELETE FROM backups WHERE user_id = ?").run(userId);
   db.prepare("DELETE FROM users WHERE id = ?").run(userId);
   return { receipts, messages, keys, invites, devices, contacts };
 });
