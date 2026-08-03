@@ -61,12 +61,22 @@ jobs:
   build:
     needs: checks
     runs-on: ubuntu-latest
+    # Компиляция Android идёт минут 20–40. Дефолтные 360 минут не нужны, но и
+    # обрывать на 30 нельзя: очередь npm и Gradle бывают медленными.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      # Gradle для Android SDK 36 требует JDK 17. На раннере есть несколько
+      # версий, и без явного выбора берётся не та.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
       - name: Собрать общий крипто-пакет
         run: |
@@ -85,31 +95,50 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: npx eas-cli@latest init --non-interactive --force
 
-      - name: Запустить EAS Build (production, Android)
+      # Сборка на самом раннере, а не в облаке EAS.
+      #
+      # Почему так: бесплатный план Expo даёт ограниченное число облачных
+      # Android-сборок в месяц, и оно кончается («This account has used its
+      # Android builds from the Free plan this month»). Локальная сборка эту
+      # квоту не тратит вообще — считает GitHub, а не Expo.
+      #
+      # Ключ подписи при этом остаётся ТОТ ЖЕ: --local берёт credentials с
+      # серверов Expo (для этого и нужен EXPO_TOKEN). Это принципиально —
+      # APK с другой подписью не встал бы поверх установленного, и людям
+      # пришлось бы удалять приложение вместе с ключами и перепиской
+      # (docs/BUILD.md §0).
+      - name: Собрать APK на раннере (production, без облачной квоты)
         working-directory: app
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # Иначе Gradle на раннере упирается в дефолтный heap и падает на
+          # оптимизации бандла с OutOfMemoryError.
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g
         run: |
-          # Без set +e шаг падает раньше, чем мы успеваем показать JSON с
-          # причиной отказа, и в логе GitHub остаётся только "Build failed".
           set +e
-          npx eas-cli@latest build --platform android --profile production --non-interactive --wait --json > ../eas-build-result.json
+          npx eas-cli@latest build \
+            --platform android \
+            --profile production \
+            --local \
+            --non-interactive \
+            --output "$GITHUB_WORKSPACE/cry.apk"
           code=$?
-          echo "--- eas-build-result.json ---"
-          cat ../eas-build-result.json || true
           if [ "$code" -ne 0 ]; then
-            echo "--- причина отказа последней сборки на стороне EAS ---"
-            npx eas-cli@latest build:list --limit 1 --json --non-interactive || true
+            echo "--- последние сборки проекта на стороне EAS (для контекста) ---"
+            npx eas-cli@latest build:list --limit 3 --json --non-interactive || true
           fi
           exit "$code"
 
-      - name: Скачать APK
+      - name: Проверить артефакт и достать versionCode
         run: |
-          URL=$(jq -r '.[0].artifacts.buildUrl' eas-build-result.json)
-          VERSION=$(jq -r '.[0].appBuildVersion // "?"' eas-build-result.json)
-          echo "APK URL: $URL (versionCode $VERSION)"
-          echo "VERSION_CODE=$VERSION" >> "$GITHUB_ENV"
-          curl -L -o cry.apk "$URL"
+          ls -la "$GITHUB_WORKSPACE/cry.apk"
+          # versionCode берём из самого APK: при appVersionSource=remote его
+          # присваивает EAS, и угадывать его в описании релиза не надо.
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort | tail -1)
+          VERSION=$("$AAPT" dump badging "$GITHUB_WORKSPACE/cry.apk" 2>/dev/null \
+            | grep -oE "versionCode='[0-9]+'" | head -1 | grep -oE "[0-9]+")
+          echo "versionCode = ${VERSION:-?}"
+          echo "VERSION_CODE=${VERSION:-?}" >> "$GITHUB_ENV"
 
       - name: Опубликовать в GitHub Release
         uses: softprops/action-gh-release@v2
@@ -117,8 +146,9 @@ jobs:
           tag_name: release-${{ github.run_number }}
           name: "Cry — релиз #${{ github.run_number }} (versionCode ${{ env.VERSION_CODE }})"
           body: |
-            Релизный Android APK (EAS Build, профиль `production`), собрано из
-            коммита ${{ github.sha }}. Перед сборкой прошли тесты крипто-пакета,
+            Релизный Android APK (профиль `production`, собран на раннере
+            GitHub — облачная квота Expo не тратится) из коммита
+            ${{ github.sha }}. Перед сборкой прошли тесты крипто-пакета,
             проверки клиента и сборка бандла.
 
             **Ставится поверх прежней версии как обновление** — ключ подписи тот

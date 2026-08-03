@@ -9,12 +9,18 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
       - name: Собрать общий крипто-пакет
         run: |
@@ -33,29 +39,32 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: npx eas-cli@latest init --non-interactive --force
 
-      - name: Запустить EAS Build (preview, Android — автономный APK)
+      # Собираем на раннере, а не в облаке EAS: бесплатный план Expo даёт
+      # ограниченное число облачных Android-сборок в месяц, и оно кончается.
+      # Локальная сборка эту квоту не тратит, а ключ подписи берёт с серверов
+      # Expo — то есть подпись остаётся той же (см. docs/BUILD.md §0).
+      - name: Собрать APK на раннере (preview, без облачной квоты)
         working-directory: app
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g
         run: |
-          # Без set +e шаг падает раньше, чем мы успеваем показать JSON с
-          # причиной отказа, и в логе GitHub остаётся только "Build failed".
           set +e
-          npx eas-cli@latest build --platform android --profile preview --non-interactive --wait --json > ../eas-build-result.json
+          npx eas-cli@latest build \
+            --platform android \
+            --profile preview \
+            --local \
+            --non-interactive \
+            --output "$GITHUB_WORKSPACE/family-messenger.apk"
           code=$?
-          echo "--- eas-build-result.json ---"
-          cat ../eas-build-result.json || true
           if [ "$code" -ne 0 ]; then
-            echo "--- причина отказа последней сборки на стороне EAS ---"
-            npx eas-cli@latest build:list --limit 1 --json --non-interactive || true
+            echo "--- последние сборки проекта на стороне EAS (для контекста) ---"
+            npx eas-cli@latest build:list --limit 3 --json --non-interactive || true
           fi
           exit "$code"
 
-      - name: Скачать APK
-        run: |
-          URL=$(jq -r '.[0].artifacts.buildUrl' eas-build-result.json)
-          echo "APK URL: $URL"
-          curl -L -o family-messenger.apk "$URL"
+      - name: Проверить артефакт
+        run: ls -la "$GITHUB_WORKSPACE/family-messenger.apk"
 
       - name: Опубликовать в GitHub Release
         uses: softprops/action-gh-release@v2
