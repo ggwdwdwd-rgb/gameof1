@@ -56,8 +56,18 @@ class KeepAliveService : Service() {
     val text = intent?.getStringExtra(EXTRA_TEXT) ?: "На связи"
 
     createChannel()
-    startForeground(NOTIFICATION_ID, buildNotification(title, text))
-    isRunning = true
+    // startForeground умеет бросать исключение: начиная с Android 12 система
+    // запрещает запуск службы переднего плана из фона, и хотя перезапуск по
+    // START_STICKY инициирует она сама, полагаться на это без страховки нельзя.
+    // Необработанное исключение здесь уронило бы процесс приложения целиком.
+    try {
+      startForeground(NOTIFICATION_ID, buildNotification(title, text))
+      isRunning = true
+    } catch (error: Throwable) {
+      isRunning = false
+      stopSelf()
+      return START_NOT_STICKY
+    }
 
     startJsTask()
 

@@ -19,7 +19,21 @@ import { getCrypto } from "../crypto/sodium";
 import { clearLockConfig, loadLockConfig, saveLockConfig, type LockConfig } from "../storage/lock";
 import { buildLabel } from "../util/buildInfo";
 import { getPermissionState, requestPermission, showTest } from "../notify/notifications";
+import { BACKGROUND_RUN_SETTING } from "../background/task";
+import { getSetting } from "../db/settings";
 import type { SelfTestStep } from "../context/AppContext";
+
+/** «5 мин назад» из отметки о запуске фоновой задачи. */
+function describeBackgroundRun(stored: string | null): string {
+  const ts = stored === null ? NaN : Number(stored);
+  if (!Number.isFinite(ts) || ts <= 0) return "ни разу";
+  const minutes = Math.floor((Date.now() - ts) / 60_000);
+  if (minutes < 1) return "только что";
+  if (minutes < 60) return `${minutes} мин назад`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ч назад`;
+  return new Date(ts).toLocaleString("ru-RU");
+}
 
 /**
  * Через сколько после сворачивания снова спрашивать код.
@@ -168,9 +182,13 @@ export function SettingsScreen({
    * разделяют совершенно разные причины — сервер не принимает, список
    * участников не разобрался, база не пишется.
    */
-  const [diag, setDiag] = useState<{ outbox: number; messages: number } | null>(null);
+  const [diag, setDiag] = useState<{ outbox: number; messages: number; backgroundRun: string } | null>(null);
   const refreshDiag = useCallback(async () => {
-    setDiag({ outbox: await countOutbox(), messages: await countMessages() });
+    setDiag({
+      outbox: await countOutbox(),
+      messages: await countMessages(),
+      backgroundRun: describeBackgroundRun(await getSetting(BACKGROUND_RUN_SETTING)),
+    });
   }, []);
 
   /** Результат самопроверки по шагам: видно, на каком именно всё встаёт. */
