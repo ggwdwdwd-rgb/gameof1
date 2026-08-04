@@ -333,6 +333,15 @@ export function SettingsScreen({
   const handlePassphrase = useCallback(
     async (mode: PassphraseMode, passphrase: string) => {
       setBackupBusy(true);
+      // Спиннер должен успеть нарисоваться, прежде чем Argon2id (crypto_pwhash)
+      // на секунду встанет на JS-потоке: react-native-libsodium вызывает его
+      // синхронно через JSI, без отдельного потока. `setBackupBusy(true)`
+      // ставит обновление в очередь, но без паузы код тут же нырнёт в
+      // `backupNow`/`restoreFromBackup` в ТОМ ЖЕ тике — движок успеет закоммитить
+      // дерево, но не отрисовать кадр, и человек увидит не спиннер, а зависшее
+      // «Создать»/«Восстановить» на секунду. Двойной requestAnimationFrame —
+      // рабочий способ дождаться реальной отрисовки, а не только коммита.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       try {
         if (mode === "create") {
           const result = await backupNow(passphrase);
