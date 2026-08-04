@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Animated, Easing, StyleSheet, useWindowDimensions, View } from "react-native";
+import { Animated, Easing, InteractionManager, StyleSheet, useWindowDimensions, View } from "react-native";
 import { useTheme } from "../theme/ThemeContext";
 import { clearTransition, navLayout, type NavDirection } from "./navigatorLayout";
 
@@ -90,7 +90,24 @@ export function Navigator({
     setTransition({ id, leaving: latest.current, dir: direction });
     latest.current = { key: screenKey, node: children };
     progress.setValue(0);
+
+    /**
+     * Держим «интеракшен» на всё время перехода.
+     *
+     * Без этого экран, в который переходим, тут же начинает свою тяжёлую
+     * работу — например, ChatScreen читает историю из sqlite и заполняет
+     * FlatList — ровно в те же 280 мс, что идёт трансформ. На Fabric (New
+     * Architecture, `newArchEnabled` в app.json) это не «параллельная» работа:
+     * тяжёлый коммит нового поддерева может задержать коммит кадра самой
+     * анимации, и переход визуально спотыкается на середине, а не просто чуть
+     * медленнее рисуется. Экраны, которые хотят отложить свою тяжёлую загрузку
+     * до конца перехода, подписываются через
+     * `InteractionManager.runAfterInteractions` (см. ChatScreen.tsx) — им для
+     * этого и нужен открытый хэндл здесь.
+     */
+    const interaction = InteractionManager.createInteractionHandle();
     Animated.timing(progress, { toValue: 1, duration: DURATION, easing: EASE, useNativeDriver: true }).start(() => {
+      InteractionManager.clearInteractionHandle(interaction);
       // Снимается и доигравший переход, и прерванный — см. clearTransition.
       setTransition((current) => clearTransition(current, id));
     });

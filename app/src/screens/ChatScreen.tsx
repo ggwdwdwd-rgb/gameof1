@@ -1,6 +1,6 @@
 import * as Clipboard from "expo-clipboard";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Animated, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Animated, FlatList, InteractionManager, Pressable, StyleSheet, Text, View } from "react-native";
 import { buildEnvelopeFromLocalFile, persistLocalFile } from "../chat/media";
 import { getCurrentLocationOnce, pickAndCompressImage, pickFile } from "../chat/pickers";
 import { useApp, type SendResult } from "../context/AppContext";
@@ -187,7 +187,16 @@ export function ChatScreen({
       void markChatRead(chatId);
     }
 
-    void refresh();
+    // Первую загрузку откладываем до конца перехода Navigator: чтение из
+    // sqlite и заполнение FlatList — тяжёлая работа, и если она стартует
+    // прямо на монтировании, то на Fabric (New Architecture) её коммит
+    // конкурирует с коммитом кадров анимации перехода и переход спотыкается
+    // (см. комментарий у InteractionManager в Navigator.tsx). Подписки на
+    // живые события ниже — не откладываем: они должны реагировать сразу,
+    // даже если это случится на середине перехода, а не после его конца.
+    const initialLoad = InteractionManager.runAfterInteractions(() => {
+      if (mounted) void refresh();
+    });
     const offInserted = chatEvents.on("messageInserted", (insertedChatId) => {
       if (insertedChatId === chatId) void refresh();
     });
@@ -202,6 +211,7 @@ export function ChatScreen({
 
     return () => {
       mounted = false;
+      initialLoad.cancel();
       offInserted();
       offStatus();
       offTyping();

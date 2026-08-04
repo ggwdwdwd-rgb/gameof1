@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  InteractionManager,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { describeFailure, useApp } from "../context/AppContext";
 import { computeMediaStorage, type MediaStorageBreakdown } from "../chat/media";
@@ -267,7 +278,20 @@ export function SettingsScreen({
    */
   const [storage, setStorage] = useState<MediaStorageBreakdown | null>(null);
   useEffect(() => {
-    void listAllMessages().then((messages) => setStorage(computeMediaStorage(messages)));
+    // Откладываем до конца перехода в настройки той же причине, что и
+    // начальную загрузку чата в ChatScreen.tsx: полный проход по sqlite
+    // без лимита — тяжёлая работа, и запуск её прямо на монтировании
+    // конкурирует с коммитом кадров анимации перехода на Fabric.
+    let mounted = true;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void listAllMessages().then((messages) => {
+        if (mounted) setStorage(computeMediaStorage(messages));
+      });
+    });
+    return () => {
+      mounted = false;
+      task.cancel();
+    };
   }, []);
 
   /** Результат самопроверки по шагам: видно, на каком именно всё встаёт. */
