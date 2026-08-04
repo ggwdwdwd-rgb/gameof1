@@ -1,3 +1,4 @@
+import { deleteLocalMediaFile } from "../chat/media";
 import { getDb } from "./database";
 import { UPDATE_CONTACT_REVOKED } from "./sql";
 
@@ -99,12 +100,23 @@ export async function getContact(userId: string): Promise<Contact | null> {
  * Нужно, когда участника удалили на сервере: писать ему нельзя (ключей от него
  * ни у кого нет), а чат с ним висел бы в списке навсегда. Сообщения удаляем
  * тоже — расшифровать их всё равно нечем, а место они занимают.
+ *
+ * Файлы медиа забираем ДО удаления строк: сама запись — единственное, что
+ * знает про localUri. Без этого шага удаление контакта стирало бы записи из
+ * базы, но все его фото и голосовые тихо оставались бы в песочнице приложения
+ * навсегда — то есть решило бы ровно то, что обещано в комментарии выше, только
+ * на бумаге.
  */
 export async function deleteContactWithChat(userId: string, chatId: string): Promise<void> {
   const db = await getDb();
+  const media = await db.getAllAsync<{ content_type: string; plaintext: string | null }>(
+    "SELECT content_type, plaintext FROM messages WHERE chat_id = ?",
+    [chatId],
+  );
   await db.runAsync("DELETE FROM messages WHERE chat_id = ?", [chatId]);
   await db.runAsync("DELETE FROM sync_state WHERE chat_id = ?", [chatId]);
   await db.runAsync("DELETE FROM contacts WHERE user_id = ?", [userId]);
+  for (const row of media) deleteLocalMediaFile(row.content_type, row.plaintext);
 }
 
 /**

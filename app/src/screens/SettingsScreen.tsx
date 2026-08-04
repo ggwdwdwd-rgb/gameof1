@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { describeFailure, useApp } from "../context/AppContext";
+import { computeMediaStorage, type MediaStorageBreakdown } from "../chat/media";
 import { contactTitle, type Contact } from "../db/contacts";
-import { countMessages } from "../db/messages";
+import { countMessages, listAllMessages } from "../db/messages";
 import { countOutbox } from "../db/outbox";
 import { useTheme, useThemePreference } from "../theme/ThemeContext";
 import type { Theme, ThemePreference } from "../theme/theme";
@@ -34,6 +35,13 @@ function describeBackup(state: BackupState): string {
       ? `${Math.max(1, Math.round(state.sizeBytes / 1024))} КБ`
       : `${(state.sizeBytes / (1024 * 1024)).toFixed(1)} МБ`;
   return `${new Date(state.updatedAt).toLocaleString("ru-RU")} · ${size}`;
+}
+
+/** «12,3 МБ» / «0 Б» — та же шкала, что у копии, но с честным нулём. */
+function describeSize(bytes: number): string {
+  if (bytes === 0) return "0 Б";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
 /** «5 мин назад» из отметки о запуске фоновой задачи. */
@@ -249,6 +257,17 @@ export function SettingsScreen({
       messages: await countMessages(),
       backgroundRun: describeBackgroundRun(await getSetting(BACKGROUND_RUN_SETTING)),
     });
+  }, []);
+
+  /**
+   * Хранилище: сколько места на телефоне занимают фото, голосовые и файлы.
+   *
+   * Читается один раз при открытии настроек, а не на каждый рендер: чтобы
+   * посчитать, нужно пройти всю локальную базу (listAllMessages без лимита).
+   */
+  const [storage, setStorage] = useState<MediaStorageBreakdown | null>(null);
+  useEffect(() => {
+    void listAllMessages().then((messages) => setStorage(computeMediaStorage(messages)));
   }, []);
 
   /** Результат самопроверки по шагам: видно, на каком именно всё встаёт. */
@@ -821,6 +840,35 @@ export function SettingsScreen({
           </View>
         </Card>
 
+        <SectionTitle>Хранилище</SectionTitle>
+        <Card>
+          <View style={styles.block}>
+            {storage === null ? (
+              <ActivityIndicator color={theme.colors.accent} />
+            ) : (
+              <>
+                <DiagRow label="Фото" value={`${describeSize(storage.image.bytes)} · ${storage.image.count} шт.`} theme={theme} />
+                <DiagRow
+                  label="Голосовые"
+                  value={`${describeSize(storage.voice.bytes)} · ${storage.voice.count} шт.`}
+                  theme={theme}
+                />
+                <DiagRow label="Файлы" value={`${describeSize(storage.file.bytes)} · ${storage.file.count} шт.`} theme={theme} />
+                <View style={[styles.divider, { backgroundColor: theme.colors.divider }]} />
+                <DiagRow
+                  label="Всего"
+                  value={describeSize(storage.image.bytes + storage.voice.bytes + storage.file.bytes)}
+                  theme={theme}
+                />
+              </>
+            )}
+            <Text style={[styles.hint, { color: theme.colors.textMuted }]}>
+              Только на этом телефоне — сервер не хранит расшифрованные фото и голосовые вовсе. Удаление сообщения
+              стирает и файл: вернуть его можно только если он ещё есть у собеседника.
+            </Text>
+          </View>
+        </Card>
+
         <SectionTitle>Безопасность</SectionTitle>
         <Card>
           <View style={styles.block}>
@@ -1123,6 +1171,7 @@ const styles = StyleSheet.create({
   stepRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   stepText: { flex: 1, fontSize: 13, lineHeight: 18 },
   diagRow: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 12, paddingVertical: 4 },
+  divider: { height: StyleSheet.hairlineWidth, marginVertical: 6 },
   diagLabel: { fontSize: 14 },
   diagValue: { fontSize: 14, fontWeight: "600" },
   memberText: { flex: 1 },

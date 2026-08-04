@@ -152,3 +152,60 @@ export function formatFileSize(bytes?: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
 }
+
+/**
+ * Удаляет локальный файл медиа, если plaintext сообщения на него указывал.
+ *
+ * Вызывается ПЕРЕД тем, как plaintext обнулят в базе (см. markMessageDeleted в
+ * db/messages.ts) — иначе ссылка потеряется, а сам файл в песочнице приложения
+ * останется на диске навсегда. Раньше именно так и было: удаление сообщения
+ * стирало запись из базы, но не файл, и место на телефоне тихо утекало с
+ * каждым удалённым фото или голосовым.
+ *
+ * Ошибку файловой системы не поднимаем: запись из базы уже стёрта, и
+ * останавливать на этом удаление сообщения не за что.
+ */
+export function deleteLocalMediaFile(contentType: string, plaintext: string | null): void {
+  if (contentType !== "image" && contentType !== "voice" && contentType !== "file") return;
+  const meta = parseLocalMediaMeta(plaintext);
+  if (!meta) return;
+  try {
+    const file = new File(meta.localUri);
+    if (file.exists) file.delete();
+  } catch {
+    // Файла может не быть (уже удалён, или sandbox другой сборки) — не повод падать.
+  }
+}
+
+export interface MediaStorageBreakdown {
+  image: { count: number; bytes: number };
+  voice: { count: number; bytes: number };
+  file: { count: number; bytes: number };
+}
+
+/**
+ * Сколько места на телефоне занимают медиа — по типам.
+ *
+ * Берём sizeBytes, уже посчитанный при отправке/приёме (см. LocalMediaMeta), а
+ * не ходим в файловую систему за каждым файлом отдельно: при сотнях сообщений
+ * это были бы сотни синхронных обращений к диску на каждое открытие настроек.
+ * Удалённые (deletedAt) не считаем — их plaintext уже обнулён, локального файла
+ * тоже нет (см. deleteLocalMediaFile).
+ */
+export function computeMediaStorage(messages: { contentType: string; plaintext: string | null; deletedAt: number | null }[]): MediaStorageBreakdown {
+  const breakdown: MediaStorageBreakdown = {
+    image: { count: 0, bytes: 0 },
+    voice: { count: 0, bytes: 0 },
+    file: { count: 0, bytes: 0 },
+  };
+  for (const message of messages) {
+    if (message.deletedAt !== null) continue;
+    if (message.contentType !== "image" && message.contentType !== "voice" && message.contentType !== "file") continue;
+    const meta = parseLocalMediaMeta(message.plaintext);
+    if (!meta) continue;
+    const bucket = breakdown[message.contentType];
+    bucket.count += 1;
+    bucket.bytes += meta.sizeBytes ?? 0;
+  }
+  return breakdown;
+}

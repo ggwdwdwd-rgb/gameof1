@@ -1,3 +1,4 @@
+import { deleteLocalMediaFile } from "../chat/media";
 import { getDb } from "./database";
 import {
   MARK_CHAT_READ,
@@ -186,7 +187,20 @@ export async function messageExists(clientMsgId: string): Promise<boolean> {
   return row !== null;
 }
 
+/**
+ * Помечает удалённым и стирает локальный файл медиа, если он был.
+ *
+ * Раньше стирался только plaintext в базе — сам файл в песочнице приложения
+ * (фото, голосовое) оставался на диске навсегда, и место тихо утекало с каждым
+ * удалённым сообщением. Забираем content_type и plaintext ДО обновления строки:
+ * после UPDATE ссылки на файл уже не будет.
+ */
 export async function markMessageDeleted(msgId: string): Promise<void> {
   const db = await getDb();
+  const row = await db.getFirstAsync<{ content_type: string; plaintext: string | null }>(
+    "SELECT content_type, plaintext FROM messages WHERE id = ?",
+    [msgId],
+  );
   await db.runAsync("UPDATE messages SET deleted_at = ?, plaintext = NULL WHERE id = ?", [Date.now(), msgId]);
+  if (row) deleteLocalMediaFile(row.content_type, row.plaintext);
 }
