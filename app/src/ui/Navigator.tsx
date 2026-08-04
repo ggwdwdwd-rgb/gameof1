@@ -6,19 +6,23 @@ import { clearTransition, navLayout, type NavDirection } from "./navigatorLayout
 /**
  * Переход между экранами с параллаксом — как в Telegram и вообще в iOS-навигации.
  *
- * Чем это отличается от прежнего ScreenTransition: тот анимировал только
- * входящий экран, потому что уходящий размонтировался в тот же кадр. Получалась
- * подмена картинки с наездом — по краю на мгновение просвечивала пустота.
+ * Уходящий экран остаётся смонтированным на время перехода: при push/pop он
+ * едет вбок на четверть ширины и притухает, пока новый выезжает во всю ширину —
+ * разница скоростей и читается как «слои». Модальный (контакты) идёт по
+ * вертикали: входящий выезжает снизу и проявляется, нижний темнеет и чуть
+ * уменьшается, никуда не двигаясь по осям, поэтому там физически не может
+ * возникнуть чёрный экран — кто-то из двух всегда закрывает всё. Закрытие
+ * модального — точное зеркало открытия (см. navigatorLayout.ts), а не «pop» со
+ * сдвигом вбок: раньше было именно так, и движение при закрытии не совпадало с
+ * тем, как экран появился.
  *
- * Здесь уходящий экран остаётся смонтированным на время перехода: он уезжает
- * влево на четверть ширины и притухает, пока новый выезжает справа во всю
- * ширину. Именно эта разница скоростей (новый идёт полный путь, старый — четверть)
- * и читается как «слои», а не как «слайд». Назад всё играется зеркально: старый
- * уезжает вправо целиком, а тот, что был под ним, догоняет из недосдвига.
+ * Вся геометрия — в src/ui/navigatorLayout.ts, чистыми функциями с числовыми
+ * диапазонами; здесь их просто интерполируют. Направление-специфичных ветвлений
+ * в этом файле больше нет — это то, что отличало старую версию, где push/pop/
+ * modal проверялись прямо в JSX, и было легко забыть один из путей.
  *
  * Полноценной навигации в приложении нет — экраны подменяются условным
- * рендером, поэтому «стек» здесь ровно один кадр глубиной. Больше и не нужно:
- * анимируется только тот переход, который человек видит прямо сейчас.
+ * рендером, поэтому «стек» здесь ровно один кадр глубиной.
  */
 export type { NavDirection };
 
@@ -98,55 +102,47 @@ export function Navigator({
   const leaving = transition?.leaving ?? null;
 
   /**
-   * Вся геометрия — одним `useMemo`, привязанным к `[progress, dir, width, height]`.
+   * Все интерполяции — одним `useMemo`, привязанным к `[progress, dir, width,
+   * height]`.
    *
-   * Без этого `progress.interpolate(...)` вызывался прямо в теле рендера и
+   * Без этого `progress.interpolate(...)` вызывался бы прямо в теле рендера и
    * создавал НОВЫЙ узел анимации на каждый ре-рендер `Navigator` — а он
-   * случается не только на смену экрана: любой ре-рендер родителя (`App.tsx`)
-   * во время уже идущего перехода пересоздавал интерполяции, и каждая такая
-   * пересборка означает отключение старого узла от нативной стороны и
-   * подключение нового через мост. Если это происходило посреди 280-мс
-   * анимации, кадр дёргался — то самое «дёргано». `useMemo` пересчитывает
-   * интерполяции только тогда, когда меняется направление или размеры экрана,
-   * а не на каждый чих родителя.
+   * случается не только на смену экрана: любой ре-рендер родителя во время уже
+   * идущего перехода пересоздавал бы интерполяции, а каждая такая пересборка —
+   * это отключение старого узла от нативной стороны и подключение нового через
+   * мост. Посреди 280-мс анимации это дёргает кадр. `useMemo` пересчитывает
+   * интерполяции только тогда, когда меняется направление или размеры экрана.
    */
-  const geometry = useMemo(() => {
+  const anim = useMemo(() => {
     const layout = navLayout(dir, width, height);
     const between = (range: { from: number; to: number }): Animated.AnimatedInterpolation<number> =>
       progress.interpolate({ inputRange: [0, 1], outputRange: [range.from, range.to] });
 
     return {
       leavingOnTop: layout.leavingOnTop,
+      hasEdgeScrim: layout.hasEdgeScrim,
       enterX: between(layout.enterX),
       enterY: between(layout.enterY),
-      // Возврат — это «снятие верхнего слоя», и нижний не должен проявляться
-      // из прозрачности: он всё время был там.
-      enterOpacity: layout.enterFade ? progress : 1,
+      enterOpacity: between(layout.enterOpacity),
+      enterScale: between(layout.enterScale),
       leaveX: between(layout.leaveX),
-      leaveOpacity:
-        dir === "push"
-          ? progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] })
-          : dir === "modal"
-            ? progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] })
-            : 1,
-      leaveScale: dir === "modal" ? progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.96] }) : 1,
-      // Полоска-тень вдоль края верхнего слоя. Тонкая и постоянного размера —
-      // просто затемнение opacity, без shadow*/elevation. Раньше тень висела
-      // на слое во весь экран через Android elevation, а это пересчёт битмапа
-      // тени под всю площадь на каждом кадре трансформа — ровно там, где
-      // важна плавность, и ровно то, что её портило. shadowColor/shadowRadius
-      // к тому же на Android не действуют вообще (это iOS-свойства), так что
-      // реальную (и дорогую) работу делала только elevation.
+      leaveY: between(layout.leaveY),
+      leaveOpacity: between(layout.leaveOpacity),
+      leaveScale: between(layout.leaveScale),
+      // Полоска-тень вдоль края верхнего слоя — только затемнение opacity, без
+      // shadow*/elevation. Раньше тень висела на слое во весь экран через
+      // Android elevation, а это пересчёт битмапа тени под всю площадь на
+      // каждом кадре трансформа — ровно там, где важна плавность.
+      // shadowColor/shadowRadius на Android к тому же не действуют вообще (это
+      // iOS-свойства), так что реальную и дорогую работу делала только
+      // elevation.
       //
       // Интенсивность держим почти постоянной, пока край едет по экрану, и
       // гасим только в самом конце: физическая тень не тускнеет по ходу
-      // движения, она пропадает, когда предмет ложится на место. Плоское
-      // затухание [0,1]→[0.24,0] гасило тень как раз к тому моменту, когда
-      // край становится видимым внутри экрана, — эффект был почти незаметен.
-      scrim:
-        dir === "modal"
-          ? null
-          : progress.interpolate({ inputRange: [0, 0.82, 1], outputRange: [0.2, 0.2, 0] }),
+      // движения, она пропадает, когда предмет ложится на место.
+      scrim: layout.hasEdgeScrim
+        ? progress.interpolate({ inputRange: [0, 0.82, 1], outputRange: [0.2, 0.2, 0] })
+        : null,
     };
   }, [progress, dir, width, height]);
 
@@ -159,14 +155,14 @@ export function Navigator({
           styles.layer,
           {
             backgroundColor: theme.colors.background,
-            opacity: geometry.leaveOpacity,
-            transform: [{ translateX: geometry.leaveX }, { scale: geometry.leaveScale }],
+            opacity: anim.leaveOpacity,
+            transform: [{ translateX: anim.leaveX }, { translateY: anim.leaveY }, { scale: anim.leaveScale }],
           },
         ]}
       >
         {leaving.node}
-        {geometry.leavingOnTop && geometry.scrim !== null && (
-          <Animated.View pointerEvents="none" style={[styles.scrim, styles.scrimLeft, { opacity: geometry.scrim }]} />
+        {anim.leavingOnTop && anim.scrim !== null && (
+          <Animated.View pointerEvents="none" style={[styles.scrim, styles.scrimLeft, { opacity: anim.scrim }]} />
         )}
       </Animated.View>
     );
@@ -178,16 +174,16 @@ export function Navigator({
         styles.layer,
         {
           backgroundColor: theme.colors.background,
-          opacity: geometry.enterOpacity,
-          transform: [{ translateX: geometry.enterX }, { translateY: geometry.enterY }],
+          opacity: anim.enterOpacity,
+          transform: [{ translateX: anim.enterX }, { translateY: anim.enterY }, { scale: anim.enterScale }],
         },
       ]}
     >
       {children}
       {/* Тень-полоска по левому краю входящего слоя — то, что делает переход
           «слоями», а не плоской подменой картинки. */}
-      {leaving !== null && !geometry.leavingOnTop && geometry.scrim !== null && (
-        <Animated.View pointerEvents="none" style={[styles.scrim, styles.scrimLeft, { opacity: geometry.scrim }]} />
+      {leaving !== null && !anim.leavingOnTop && anim.scrim !== null && (
+        <Animated.View pointerEvents="none" style={[styles.scrim, styles.scrimLeft, { opacity: anim.scrim }]} />
       )}
     </Animated.View>
   );
@@ -196,7 +192,7 @@ export function Navigator({
   // ведёт себя неоднозначно при наличии elevation у соседних вьюх. Порядок
   // отрисовки в массиве однозначен, а переупаковка массива экземпляры не
   // рушит — React сопоставляет детей по ключу, а не по месту.
-  const layers = geometry.leavingOnTop ? [currentLayer, leavingLayer] : [leavingLayer, currentLayer];
+  const layers = anim.leavingOnTop ? [currentLayer, leavingLayer] : [leavingLayer, currentLayer];
 
   return <View style={[styles.root, { backgroundColor: theme.colors.background }]}>{layers}</View>;
 }
@@ -204,7 +200,7 @@ export function Navigator({
 const styles = StyleSheet.create({
   root: { flex: 1 },
   layer: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
-  // Просто затемнение, без shadow*/elevation — см. комментарий у geometry.scrim.
+  // Просто затемнение, без shadow*/elevation — см. комментарий у anim.scrim.
   scrim: { position: "absolute", top: 0, bottom: 0, width: 16, backgroundColor: "#000" },
   scrimLeft: { left: 0 },
 });

@@ -32,10 +32,17 @@ type Screen =
  */
 const DEPTH: Record<Screen["name"], number> = { chatList: 0, chat: 2, settings: 1, contacts: 1 };
 
-/** Контакты открываются как модальное окно — снизу: это не «глубже», а «поверх». */
+/**
+ * Контакты открываются как модальное окно — снизу: это не «глубже», а «поверх».
+ *
+ * Закрытие — отдельное направление (modalClose), а не «pop». Раньше здесь стояло
+ * `if (from === "contacts") return "pop"`: закрытие ехало вбок, как обычное
+ * «назад», хотя открывалось снизу — движение при выходе не совпадало с тем, как
+ * экран появился, и это было заметно независимо от частоты кадров.
+ */
 function directionFor(from: Screen["name"], to: Screen["name"]): NavDirection {
-  if (to === "contacts") return "modal";
-  if (from === "contacts") return "pop";
+  if (to === "contacts") return "modalOpen";
+  if (from === "contacts") return "modalClose";
   return DEPTH[to] >= DEPTH[from] ? "push" : "pop";
 }
 
