@@ -163,11 +163,30 @@ export function Navigator({
     };
   }, [progress, dir, width, height]);
 
+  /**
+   * Пока переход идёт, оба слоя — готовые растровые текстуры, а не живые
+   * деревья вьюх.
+   *
+   * Без этого на каждый кадр перехода GPU композитит заново весь экран целиком
+   * — со всеми пузырями сообщений, SVG-галочками, аватарами-градиентами — даже
+   * несмотря на то, что transform/opacity сами по себе «дёшевы». Это тот самый
+   * источник дёрганости, который не ловится по одному экрану сразу: чем
+   * сложнее уходящий или входящий экран, тем заметнее. `renderToHardwareTextureAndroid`
+   * (и `shouldRasterizeIOS` на iOS) кэширует слой в текстуру один раз и дальше
+   * просто двигает/просвечивает готовую картинку — ровно то, что делает
+   * transform-анимация в вебе или в Telegram. Включаем только на время
+   * перехода: постоянно раскрашенный текстурой слой не обновлялся бы при
+   * live-изменениях экрана (новое сообщение, тик статуса) вне перехода.
+   */
+  const layerCaching = leaving !== null;
+
   const leavingLayer =
     leaving === null ? null : (
       <Animated.View
         key={leaving.key}
         pointerEvents="none"
+        renderToHardwareTextureAndroid={layerCaching}
+        shouldRasterizeIOS={layerCaching}
         style={[
           styles.layer,
           {
@@ -187,6 +206,8 @@ export function Navigator({
   const currentLayer = (
     <Animated.View
       key={screenKey}
+      renderToHardwareTextureAndroid={layerCaching}
+      shouldRasterizeIOS={layerCaching}
       style={[
         styles.layer,
         {
