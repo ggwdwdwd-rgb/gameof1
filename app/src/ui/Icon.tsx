@@ -36,7 +36,8 @@ export type IconName =
   | "refresh"
   | "qr"
   | "camera"
-  | "trash";
+  | "trash"
+  | "search";
 
 const STROKE_WIDTH = 1.9;
 
@@ -269,6 +270,13 @@ function renderPaths(name: IconName, c: CommonProps, color: string): React.React
           <Path {...c} d="M4.6 7.2h14.8M9.4 7.2V5.4a1.4 1.4 0 0 1 1.4-1.4h2.4a1.4 1.4 0 0 1 1.4 1.4v1.8" />
           <Path {...c} d="M6.6 7.2l.9 11.4a1.8 1.8 0 0 0 1.8 1.6h5.4a1.8 1.8 0 0 0 1.8-1.6l.9-11.4" />
           <Path {...c} d="M10.4 10.8v6M13.6 10.8v6" />
+        </>
+      );
+    case "search":
+      return (
+        <>
+          <Circle {...c} cx="10.6" cy="10.6" r="6.6" />
+          <Path {...c} d="M15.5 15.5L20.5 20.5" />
         </>
       );
   }

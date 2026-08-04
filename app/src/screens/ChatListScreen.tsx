@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Animated, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Animated, FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { dmChatId } from "../chat/chatId";
 import { describeFailure, useApp } from "../context/AppContext";
@@ -173,10 +173,13 @@ export function ChatListScreen({
   onOpenSettings: () => void;
   onAddPerson: () => void;
 }): React.ReactElement {
-  const { identity, connectionState, connectionFailure, contacts, presence, chatEvents, reconnect } = useApp();
+  const { identity, displayName, connectionState, connectionFailure, contacts, presence, chatEvents, reconnect } =
+    useApp();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<ChatRow[]>([]);
+  /** Поиск по уже загрученному списку — участников десяток, новый запрос к базе не нужен. */
+  const [query, setQuery] = useState("");
 
   const refresh = useCallback(async () => {
     // Два запроса на весь список вместо двух на каждый чат: при десяти
@@ -231,6 +234,12 @@ export function ChatListScreen({
 
   const connected = connectionState === "connected";
 
+  const filteredRows = useMemo(() => {
+    const trimmed = query.trim().toLowerCase();
+    if (trimmed.length === 0) return rows;
+    return rows.filter((row) => row.title.toLowerCase().includes(trimmed));
+  }, [rows, query]);
+
   const handleRowPress = useCallback(
     (row: ChatRow) => onOpenChat(row.chatId, row.title, row.userId),
     [onOpenChat],
@@ -254,7 +263,14 @@ export function ChatListScreen({
         // Ручное переподключение: быстрее, чем ждать backoff или перезапускать приложение.
         onPressSubtitle={connected ? undefined : reconnect}
         subtitleColor={connected ? theme.colors.success : theme.colors.accent}
-        left={<View style={styles.headerSlot} />}
+        // Свой аватар слева, как вход в аккаунт в других мессенджерах — тот же
+        // экран настроек, что и по шестерне справа: два привычных места входа
+        // в одно и то же, а не две разные функции.
+        avatar={
+          <Pressable onPress={onOpenSettings} hitSlop={6}>
+            <Avatar name={displayName} seed={identity.userId} size={32} />
+          </Pressable>
+        }
         right={
           <Pressable onPress={onOpenSettings} hitSlop={12} style={styles.headerSlot}>
             <Icon name="settings" size={22} color={theme.colors.textSecondary} />
@@ -271,35 +287,71 @@ export function ChatListScreen({
         </View>
       )}
 
+      {/* Поиск по уже загруженным чатам — участников десяток, лишний запрос к
+          базе на каждую нажатую букву не нужен. Пусто и без контактов вовсе не
+          прячем: строка — часть привычного вида списка, а не награда за то, что
+          в нём есть с кем говорить. */}
+      <View style={styles.searchWrap}>
+        <View
+          style={[styles.searchPill, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}
+        >
+          <Icon name="search" size={17} color={theme.colors.textMuted} />
+          <TextInput
+            style={[styles.searchInput, { color: theme.colors.textPrimary }]}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Поиск"
+            placeholderTextColor={theme.colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="search"
+          />
+          {query.length > 0 && (
+            <Pressable onPress={() => setQuery("")} hitSlop={8}>
+              <Icon name="close" size={16} color={theme.colors.textMuted} />
+            </Pressable>
+          )}
+        </View>
+      </View>
+
       <FlatList
-        data={rows}
+        data={filteredRows}
         keyExtractor={keyExtractor}
         contentContainerStyle={[
-          rows.length === 0 ? styles.emptyContainer : styles.list,
+          filteredRows.length === 0 ? styles.emptyContainer : styles.list,
           // Кнопка «+» и панель навигации не должны перекрывать последний чат.
           { paddingBottom: insets.bottom + 96 },
         ]}
         ItemSeparatorComponent={Separator}
         renderItem={renderItem}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <View style={[styles.emptyIcon, { backgroundColor: theme.colors.accentSoft }]}>
-              <Icon name="shield" size={34} color={theme.colors.accent} />
+          // Ничего не нашли поиском — это не то же самое, что «нет ни одного
+          // контакта»: у первого есть с кем говорить, просто не по этому слову,
+          // и предлагать «найти по тегу» здесь неуместно и сбивает с толку.
+          query.trim().length > 0 ? (
+            <View style={styles.empty}>
+              <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>Никого не нашли</Text>
             </View>
-            <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}>Пока никого нет</Text>
-            <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-              Найдите человека по его @тегу — или дайте ему свой, и он напишет первым. Всё шифруется на устройстве.
-            </Text>
-            <Pressable
-              style={({ pressed }) => [
-                styles.emptyButton,
-                { backgroundColor: theme.colors.accent, opacity: pressed ? 0.85 : 1 },
-              ]}
-              onPress={onAddPerson}
-            >
-              <Text style={[styles.emptyButtonText, { color: theme.colors.onAccent }]}>Найти по тегу</Text>
-            </Pressable>
-          </View>
+          ) : (
+            <View style={styles.empty}>
+              <View style={[styles.emptyIcon, { backgroundColor: theme.colors.accentSoft }]}>
+                <Icon name="shield" size={34} color={theme.colors.accent} />
+              </View>
+              <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}>Пока никого нет</Text>
+              <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                Найдите человека по его @тегу — или дайте ему свой, и он напишет первым. Всё шифруется на устройстве.
+              </Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.emptyButton,
+                  { backgroundColor: theme.colors.accent, opacity: pressed ? 0.85 : 1 },
+                ]}
+                onPress={onAddPerson}
+              >
+                <Text style={[styles.emptyButtonText, { color: theme.colors.onAccent }]}>Найти по тегу</Text>
+              </Pressable>
+            </View>
+          )
         }
       />
 
@@ -328,6 +380,17 @@ function keyExtractor(row: ChatRow): string {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   headerSlot: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  searchWrap: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 4 },
+  searchPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingHorizontal: 13,
+    height: 40,
+  },
+  searchInput: { flex: 1, fontSize: 15.5, padding: 0 },
   banner: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 12 },
   bannerText: { flex: 1, color: "#fff", fontSize: 13, lineHeight: 18, fontWeight: "500" },
   list: { paddingTop: 4 },
